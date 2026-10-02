@@ -417,6 +417,7 @@ data class UiSettings(
     val uploadResponse: UploadResponse = UploadResponse.TEXT_URL,
     val uploadJsonKey: String = "url",
     val uploadAllowHttp: Boolean = false,
+    val uploadDropFoTor: Boolean = false,
     val uploadAgeEnabled: Boolean = false,
     val uploadAgeRecipients: String = "",
     val imagePreviewsEnabled: Boolean = false,

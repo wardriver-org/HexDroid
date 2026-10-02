@@ -398,6 +398,7 @@ class SettingsRepository(private val ctx: Context) {
                 uploadResponse = runCatching { com.boxlabs.hexdroid.UploadResponse.valueOf(o.optString("uploadResponse", "TEXT_URL")) }.getOrDefault(com.boxlabs.hexdroid.UploadResponse.TEXT_URL),
                 uploadJsonKey = o.optString("uploadJsonKey", "url"),
                 uploadAllowHttp = o.optBoolean("uploadAllowHttp", false),
+                uploadDropFoTor = o.optBoolean("uploadDropFoTor", false),
                 uploadAgeEnabled = o.optBoolean("uploadAgeEnabled", false),
                 uploadAgeRecipients = o.optString("uploadAgeRecipients", ""),
                 imagePreviewsEnabled = o.optBoolean("imagePreviewsEnabled", false),
@@ -515,6 +516,7 @@ class SettingsRepository(private val ctx: Context) {
         o.put("uploadResponse", s.uploadResponse.name)
         o.put("uploadJsonKey", s.uploadJsonKey)
         o.put("uploadAllowHttp", s.uploadAllowHttp)
+        o.put("uploadDropFoTor", s.uploadDropFoTor)
         o.put("uploadAgeEnabled", s.uploadAgeEnabled)
         o.put("uploadAgeRecipients", s.uploadAgeRecipients)
         o.put("imagePreviewsEnabled", s.imagePreviewsEnabled)

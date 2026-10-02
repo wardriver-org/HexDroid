@@ -1,6 +1,10 @@
 package com.boxlabs.hexdroid
 
 import java.net.URI
+import com.boxlabs.hexdroid.connection.ProxyConfig
+import com.boxlabs.hexdroid.connection.ProxyType
+
+internal const val DROPFO_ONION = "http://4fmncziybi5ivolw3mhafssgeeralxcbos3lo6y5iwpnzw3hqsvn4xyd.onion/"
 
 enum class UploadProvider(val label: String, val endpoint: String) {
     DROPFO("drop.fo", "https://drop.fo/"),
@@ -21,10 +25,15 @@ internal data class UploaderConfig(
     val jsonKey: String = "url",
     val authorization: String? = null,
     val allowHttp: Boolean = false,
+    val useOrbot: Boolean = false,
     val ageEnabled: Boolean = false,
     val ageRecipients: String = "",
 ) {
+    fun uploadProxy(networkProxy: ProxyConfig): ProxyConfig =
+        if (useOrbot) ProxyConfig(ProxyType.SOCKS5, "127.0.0.1", 9050) else networkProxy
+
     fun validate(): String? {
+        if (useOrbot && (provider != UploadProvider.DROPFO || endpoint != DROPFO_ONION)) return "Tor upload requires the drop.fo onion endpoint"
         val uri = runCatching { URI(endpoint) }.getOrNull() ?: return "Invalid upload endpoint"
         if (uri.host.isNullOrBlank() || uri.rawUserInfo != null || uri.fragment != null) return "Invalid upload endpoint"
         if (uri.scheme != "https" && !(allowHttp && uri.scheme == "http")) return "Use HTTPS or explicitly enable HTTP for your self-hosted server"
@@ -37,13 +46,16 @@ internal data class UploaderConfig(
 
 internal fun UiSettings.uploadConfig(token: String? = null) = UploaderConfig(
     provider = uploadProvider,
+    useOrbot = uploadProvider == UploadProvider.DROPFO && uploadDropFoTor,
     ageEnabled = uploadAgeEnabled,
     ageRecipients = uploadAgeRecipients,
-    endpoint = uploadProvider.endpoint.ifEmpty { uploadEndpoint.trim() },
+    endpoint = if (uploadProvider == UploadProvider.DROPFO && uploadDropFoTor) DROPFO_ONION
+        else uploadProvider.endpoint.ifEmpty { uploadEndpoint.trim() },
     field = if (uploadProvider in listOf(UploadProvider.CATBOX, UploadProvider.LITTERBOX)) "fileToUpload"
         else if (uploadProvider == UploadProvider.CUSTOM) uploadFileField else "file",
     response = if (uploadProvider == UploadProvider.CUSTOM) uploadResponse else UploadResponse.TEXT_URL,
     jsonKey = uploadJsonKey,
     authorization = if (uploadProvider in listOf(UploadProvider.RUSTYPASTE, UploadProvider.CUSTOM)) token else null,
-    allowHttp = uploadAllowHttp && uploadProvider in listOf(UploadProvider.RUSTYPASTE, UploadProvider.CUSTOM),
+    allowHttp = (uploadProvider == UploadProvider.DROPFO && uploadDropFoTor) ||
+        (uploadAllowHttp && uploadProvider in listOf(UploadProvider.RUSTYPASTE, UploadProvider.CUSTOM)),
 )

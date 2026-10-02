@@ -8,6 +8,12 @@
         </trust-anchors>
     </base-config>
 
+    <!-- This onion endpoint uses HTTP inside the authenticated Tor circuit.
+         The uploader routes it exclusively through Orbot when explicitly enabled. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">4fmncziybi5ivolw3mhafssgeeralxcbos3lo6y5iwpnzw3hqsvn4xyd.onion</domain>
+    </domain-config>
+
     <!-- If you ever want to allow cleartext for specific hosts, add a domain-config:
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">irc.example.org</domain>

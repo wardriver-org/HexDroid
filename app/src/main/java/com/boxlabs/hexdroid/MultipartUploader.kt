@@ -42,7 +42,8 @@ internal object MultipartUploader {
             }
             uploadPrepared(config, file, uploadName, mime, proxy)
         } catch (e: Exception) {
-            FilehostUpload.Result(null, "Upload failed: ${e.message ?: e.javaClass.simpleName}")
+            FilehostUpload.Result(null, if (config.useOrbot) "Tor upload failed. Check that Orbot is running on 127.0.0.1:9050: ${e.message ?: e.javaClass.simpleName}"
+                else "Upload failed: ${e.message ?: e.javaClass.simpleName}")
         } finally {
             staged.forEach { it.delete() }
         }
@@ -52,7 +53,7 @@ internal object MultipartUploader {
     internal fun uploadPrepared(config: UploaderConfig, file: File, name: String, mime: String,
                                 proxy: ProxyConfig): FilehostUpload.Result {
         config.validate()?.let { return FilehostUpload.Result(null, it) }
-        val client = RemoteContentHttp.client(proxy).newBuilder()
+        val client = RemoteContentHttp.client(config.uploadProxy(proxy)).newBuilder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
             .writeTimeout(120, TimeUnit.SECONDS)

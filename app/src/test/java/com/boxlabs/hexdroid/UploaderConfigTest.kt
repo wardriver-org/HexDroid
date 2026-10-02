@@ -4,6 +4,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class UploaderConfigTest {
+    @Test fun dropFoTorIsOptInAndOverridesOnlyUploadRoute() {
+        val network = com.boxlabs.hexdroid.connection.ProxyConfig(
+            com.boxlabs.hexdroid.connection.ProxyType.SOCKS4A, "irc-proxy.example", 1080, "irc-user", "irc-pass")
+        val settings = UiSettings()
+        assertFalse(settings.uploadDropFoTor)
+        assertEquals(network, settings.uploadConfig().uploadProxy(network))
+        val tor = settings.copy(uploadDropFoTor = true).uploadConfig()
+        assertEquals(DROPFO_ONION, tor.endpoint)
+        assertTrue(tor.allowHttp)
+        assertNull(tor.validate())
+        val proxy = tor.uploadProxy(network)
+        assertEquals(com.boxlabs.hexdroid.connection.ProxyType.SOCKS5, proxy.type)
+        assertEquals("127.0.0.1", proxy.host)
+        assertEquals(9050, proxy.port)
+        assertEquals(com.boxlabs.hexdroid.connection.ProxyConfig(
+            com.boxlabs.hexdroid.connection.ProxyType.SOCKS5, "127.0.0.1", 9050), proxy)
+        assertEquals(network, settings.copy(uploadDropFoTor = true, uploadProvider = UploadProvider.ZEROXZERO).uploadConfig().uploadProxy(network))
+        assertNotNull(tor.copy(endpoint = "https://drop.fo/").validate())
+        assertNotNull(tor.copy(provider = UploadProvider.CUSTOM).validate())
+    }
+
     @Test fun uploadsAreOptInAndDropIsOnlyPreselected() {
         val settings = UiSettings()
         assertFalse(settings.uploadsEnabled)

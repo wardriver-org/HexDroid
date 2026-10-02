@@ -42,6 +42,15 @@ internal fun UploaderSettings(s: UiSettings, update: (UiSettings.() -> UiSetting
                     }
                 }
             }
+            if (s.uploadProvider == UploadProvider.DROPFO) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Upload through Tor (Orbot)", modifier = Modifier.weight(1f))
+                    Switch(s.uploadDropFoTor, { value -> update { copy(uploadDropFoTor = value) } })
+                }
+                if (s.uploadDropFoTor) {
+                    Text("Start Orbot in the same Android profile. Uploads use drop.fo’s onion service through 127.0.0.1:9050, independently of the IRC network proxy. If Orbot is unavailable, uploads stop.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
             val custom = s.uploadProvider == UploadProvider.CUSTOM
             val selfHosted = custom || s.uploadProvider == UploadProvider.RUSTYPASTE
             if (selfHosted) {
@@ -53,7 +62,7 @@ internal fun UploaderSettings(s: UiSettings, update: (UiSettings.() -> UiSetting
                 OutlinedTextField(token, { token = it; saved = false }, label = { Text("Authorization header (optional)") }, placeholder = { Text("Token or Bearer token") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
                 TextButton(enabled = s.uploadConfig().validate() == null, onClick = { saveToken(token); token = ""; saved = true }) { Text("Save token / clear if blank") }
                 if (saved) Text("Authorization updated")
-            } else Text(s.uploadProvider.endpoint, style = MaterialTheme.typography.bodySmall)
+            } else Text(s.uploadConfig().endpoint, style = MaterialTheme.typography.bodySmall)
             if (custom) {
                 OutlinedTextField(s.uploadFileField, { value -> update { copy(uploadFileField = value) } }, label = { Text("Multipart file field") }, singleLine = true)
                 UploadResponse.entries.forEach { response ->
