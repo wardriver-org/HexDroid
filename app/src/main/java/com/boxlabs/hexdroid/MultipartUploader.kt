@@ -2,19 +2,22 @@ package com.boxlabs.hexdroid
 
 import java.io.InputStream
 import java.io.File
-import java.net.HttpURLConnection
+import com.boxlabs.hexdroid.connection.ProxyConfig
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
+import java.util.concurrent.TimeUnit
 import java.net.URL
 import java.util.UUID
 
 /** Configurable multipart uploader. No IRC credentials are accepted or sent. */
 internal object MultipartUploader {
 
-    fun upload(config: UploaderConfig, fileName: String?, mimeType: String?, input: InputStream, cacheDir: File): FilehostUpload.Result {
+    fun upload(config: UploaderConfig, fileName: String?, mimeType: String?, input: InputStream, cacheDir: File, proxy: ProxyConfig): FilehostUpload.Result {
         config.validate()?.let { return FilehostUpload.Result(null, it) }
-        val boundary = "HexDroid-${UUID.randomUUID()}"
         var mime = mimeType?.takeIf { it.matches(Regex("[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+")) }
             ?: "application/octet-stream"
-        var conn: HttpURLConnection? = null
         val staged = mutableListOf<File>()
         var uploadName = fileName ?: "file"
         return try {
@@ -37,55 +40,66 @@ internal object MultipartUploader {
                 uploadName = "attachment.age"
                 mime = "application/octet-stream"
             }
-            val fields = when (config.provider) {
-                UploadProvider.CATBOX -> mapOf("reqtype" to "fileupload")
-                UploadProvider.LITTERBOX -> mapOf("reqtype" to "fileupload", "time" to "24h")
-                else -> emptyMap()
-            }
-            val prefix = fields.entries.joinToString("") { (key, value) ->
-                "--$boundary\r\nContent-Disposition: form-data; name=\"$key\"\r\n\r\n$value\r\n"
-            }
-            val header = (prefix + "--$boundary\r\nContent-Disposition: form-data; name=\"${config.field}\"; filename=\"${FilehostUpload.sanitizeFileName(uploadName)}\"\r\nContent-Type: $mime\r\n\r\n").toByteArray(Charsets.UTF_8)
-            val footer = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
-            conn = URL(config.endpoint).openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.doOutput = true
-            conn.instanceFollowRedirects = false
-            conn.connectTimeout = 30_000
-            conn.readTimeout = 120_000
-            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-            conn.setRequestProperty("Accept", "text/plain, application/json")
-            conn.setRequestProperty("User-Agent", "HexDroid/1.7.6")
-            config.authorization?.takeIf { it.isNotEmpty() }?.let { conn.setRequestProperty("Authorization", it) }
-            conn.setFixedLengthStreamingMode(header.size.toLong() + file.length() + footer.size)
-            conn.outputStream.use { out ->
-                out.write(header)
-                file.inputStream().use { it.copyTo(out, 64 * 1024) }
-                out.write(footer)
-            }
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                val detail = conn.errorStream?.use { readBounded(it, 512) }
-                    .orEmpty().replace(Regex("[\\p{Cntrl}\\s]+"), " ").trim().take(200)
-                FilehostUpload.Result(null, "Upload failed (HTTP $code)${if (detail.isEmpty()) "" else ": $detail"}")
-            } else {
-                val body = conn.inputStream.use { readBounded(it, 4096) }.trim()
-                val value = when (config.response) {
-                    UploadResponse.TEXT_URL -> body
-                    UploadResponse.LOCATION -> conn.getHeaderField("Location")?.let { URL(URL(config.endpoint), it).toString() }.orEmpty()
-                    UploadResponse.JSON_URL -> {
-                        var node: Any = org.json.JSONObject(body)
-                        config.jsonKey.split('.').forEach { key -> node = (node as org.json.JSONObject).get(key) }
-                        node as? String ?: ""
-                    }
-                }
-                parseResponse(value, config.allowHttp)
-            }
+            uploadPrepared(config, file, uploadName, mime, proxy)
         } catch (e: Exception) {
             FilehostUpload.Result(null, "Upload failed: ${e.message ?: e.javaClass.simpleName}")
         } finally {
-            conn?.disconnect()
             staged.forEach { it.delete() }
+        }
+    }
+
+    /** Send only a sanitized/encrypted staged file; fixed length works with drop.fo. */
+    internal fun uploadPrepared(config: UploaderConfig, file: File, name: String, mime: String,
+                                proxy: ProxyConfig): FilehostUpload.Result {
+        config.validate()?.let { return FilehostUpload.Result(null, it) }
+        val client = RemoteContentHttp.client(proxy).newBuilder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+            .writeTimeout(120, TimeUnit.SECONDS)
+            .callTimeout(10, TimeUnit.MINUTES)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .build()
+        try {
+            val body = MultipartBody.Builder().setType(MultipartBody.FORM).apply {
+                when (config.provider) {
+                    UploadProvider.CATBOX -> addFormDataPart("reqtype", "fileupload")
+                    UploadProvider.LITTERBOX -> {
+                        addFormDataPart("reqtype", "fileupload")
+                        addFormDataPart("time", "24h")
+                    }
+                    else -> Unit
+                }
+                addFormDataPart(config.field, FilehostUpload.sanitizeFileName(name), file.asRequestBody(mime.toMediaType()))
+            }.build()
+            val request = Request.Builder().url(config.endpoint).post(body)
+                .header("Accept", "text/plain, application/json")
+                .header("User-Agent", "HexDroid/1.7.6")
+                .apply { config.authorization?.takeIf { it.isNotEmpty() }?.let { header("Authorization", it) } }
+                .build()
+            return client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val detail = response.body.byteStream().use { readBounded(it, 512) }
+                        .replace(Regex("[\\p{Cntrl}\\s]+"), " ").trim().take(200)
+                    FilehostUpload.Result(null, "Upload failed (HTTP ${response.code})${if (detail.isEmpty()) "" else ": $detail"}")
+                } else {
+                    val text = response.body.byteStream().use { readBounded(it, 4096) }.trim()
+                    val value = when (config.response) {
+                        UploadResponse.TEXT_URL -> text
+                        UploadResponse.LOCATION -> response.header("Location")?.let { URL(URL(config.endpoint), it).toString() }.orEmpty()
+                        UploadResponse.JSON_URL -> {
+                            var node: Any = org.json.JSONObject(text)
+                            config.jsonKey.split('.').forEach { key -> node = (node as org.json.JSONObject).get(key) }
+                            node as? String ?: ""
+                        }
+                    }
+                    parseResponse(value, config.allowHttp)
+                }
+            }
+        } finally {
+            client.connectionPool.evictAll()
+            client.dispatcher.executorService.shutdown()
         }
     }
 

@@ -7,6 +7,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.io.DataInputStream
 import java.io.IOException
+import java.io.File
 import java.net.ServerSocket
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -25,7 +26,11 @@ class RemoteContentHttpTest {
     @Test fun socks5SupportsAuthentication() = checkTunnel(ProxyType.SOCKS5, true)
     @Test fun socks4aResolvesDestinationAtProxy() = checkTunnel(ProxyType.SOCKS4A, false)
 
-    private fun checkTunnel(type: ProxyType, auth: Boolean) {
+    @Test fun uploadUsesSocks5AndFixedLength() = checkTunnel(ProxyType.SOCKS5, false, true)
+    @Test fun uploadUsesAuthenticatedSocks5() = checkTunnel(ProxyType.SOCKS5, true, true)
+    @Test fun uploadUsesSocks4a() = checkTunnel(ProxyType.SOCKS4A, false, true)
+
+    private fun checkTunnel(type: ProxyType, auth: Boolean, upload: Boolean = false) {
         ServerSocket(0).use { server ->
             server.soTimeout = 5000
             val executor = Executors.newSingleThreadExecutor()
@@ -64,10 +69,31 @@ class RemoteContentHttpTest {
                         host = readCString(input)
                         out.write(byteArrayOf(0, 90, 0, 80, 127, 0, 0, 1)); out.flush()
                     }
-                    val reader = socket.getInputStream().bufferedReader()
-                    assertEquals("GET /image.png HTTP/1.1", reader.readLine())
-                    while (!reader.readLine().isNullOrEmpty()) { }
-                    out.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".toByteArray())
+                    fun line(): String = buildString {
+                        while (true) {
+                            val b = input.readUnsignedByte()
+                            if (b == 10) break
+                            if (b != 13) append(b.toChar())
+                        }
+                    }
+                    assertEquals(if (upload) "POST /upload HTTP/1.1" else "GET /image.png HTTP/1.1", line())
+                    val headers = mutableMapOf<String, String>()
+                    while (true) {
+                        val header = line()
+                        if (header.isEmpty()) break
+                        headers[header.substringBefore(':').lowercase()] = header.substringAfter(':').trim()
+                    }
+                    if (upload) {
+                        assertNull(headers["transfer-encoding"])
+                        val body = ByteArray(headers.getValue("content-length").toInt()).also { input.readFully(it) }
+                        val text = String(body, Charsets.UTF_8)
+                        assertTrue(text.contains("name=\"file\"; filename=\"test.txt\""))
+                        assertTrue(text.contains("upload payload"))
+                        assertEquals("Bearer uploader-token", headers["authorization"])
+                        assertFalse(text.contains("proxy-pass"))
+                    }
+                    val response = if (upload) "https://files.example/test.txt" else "ok"
+                    out.write("HTTP/1.1 200 OK\r\nContent-Length: ${response.length}\r\nConnection: close\r\n\r\n$response".toByteArray())
                     out.flush()
                     host
                 }
@@ -75,8 +101,22 @@ class RemoteContentHttpTest {
             val client = RemoteContentHttp.client(ProxyConfig(type, "127.0.0.1", server.localPort,
                 if (auth) "proxy-user" else null, if (auth) "proxy-pass" else null))
             try {
-                client.newCall(Request.Builder().url("http://does-not-resolve.invalid/image.png").build()).execute().use {
-                    assertEquals("ok", it.body.string())
+                if (upload) {
+                    val file = File.createTempFile("upload-test-", ".txt")
+                    try {
+                        file.writeText("upload payload")
+                        val config = UploaderConfig(UploadProvider.CUSTOM, "http://does-not-resolve.invalid/upload",
+                            allowHttp = true, authorization = "Bearer uploader-token")
+                        val result = MultipartUploader.uploadPrepared(config, file, "test.txt", "text/plain",
+                            ProxyConfig(type, "127.0.0.1", server.localPort,
+                                if (auth) "proxy-user" else null, if (auth) "proxy-pass" else null))
+                        assertEquals("https://files.example/test.txt", result.url)
+                        assertNull(result.error)
+                    } finally { file.delete() }
+                } else {
+                    client.newCall(Request.Builder().url("http://does-not-resolve.invalid/image.png").build()).execute().use {
+                        assertEquals("ok", it.body.string())
+                    }
                 }
                 assertEquals("does-not-resolve.invalid", task.get(5, TimeUnit.SECONDS))
             } finally {

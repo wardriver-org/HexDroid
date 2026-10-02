@@ -12814,7 +12814,7 @@ private fun moveNickAcrossChannels(netId: String, oldNick: String, newNick: Stri
         PreparedDccSend(file = out, offerName = out.name)
     }
 
-    /** Upload a picked document to drop.fo. Never sends IRC credentials or bypasses a proxy. */
+    /** Save uploader credentials separately from IRC credentials. */
     fun saveUploaderAuthorization(value: String) {
         val endpoint = _state.value.settings.uploadConfig().endpoint
         viewModelScope.launch(Dispatchers.IO) { repo.secretStore.setUploaderToken(endpoint, value) }
@@ -12835,10 +12835,6 @@ private fun moveNickAcrossChannels(netId: String, oldNick: String, newNick: Stri
             onDone(null, appContext.getString(R.string.vm_upload_disabled))
             return
         }
-        if (cfg.proxy.enabled) {
-            onDone(null, appContext.getString(R.string.vm_upload_no_proxy))
-            return
-        }
         viewModelScope.launch(Dispatchers.IO) {
             val result = try {
                 val name = queryDisplayName(uri)
@@ -12850,7 +12846,7 @@ private fun moveNickAcrossChannels(netId: String, oldNick: String, newNick: Stri
                         ?: return FilehostUpload.Result(null, appContext.getString(R.string.vm_file_open_failed))
                     return stream.use { inp ->
                         MultipartUploader.upload(settings.uploadConfig(repo.secretStore.getUploaderToken(settings.uploadConfig().endpoint)),
-                            fileName = name, mimeType = mime, input = inp, cacheDir = appContext.cacheDir)
+                            fileName = name, mimeType = mime, input = inp, cacheDir = appContext.cacheDir, proxy = cfg.proxy)
                     }
                 }
 
