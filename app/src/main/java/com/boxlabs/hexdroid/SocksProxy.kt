@@ -141,6 +141,17 @@ object SocksProxy {
         }
     }
 
+    /** Negotiate on an already-connected proxy socket; destination DNS stays remote. */
+    internal fun negotiate(socket: Socket, cfg: ProxyConfig, host: String, port: Int) {
+        val input = DataInputStream(socket.getInputStream())
+        val output = socket.getOutputStream()
+        when (cfg.type) {
+            ProxyType.SOCKS5 -> socks5Handshake(cfg, input, output, host, port)
+            ProxyType.SOCKS4A -> socks4aHandshake(cfg, input, output, host, port)
+            ProxyType.NONE -> throw ProxyException("Missing SOCKS proxy")
+        }
+    }
+
     // SOCKS5 (RFC 1928/1929)
 
     private const val SOCKS5_VERSION = 0x05

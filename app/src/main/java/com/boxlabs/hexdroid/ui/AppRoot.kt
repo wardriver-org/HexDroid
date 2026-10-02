@@ -175,8 +175,9 @@ fun AppRoot(
 
     val themeMode = state.settings.themeMode
     val darkTheme = when (themeMode) {
-        ThemeMode.DARK, ThemeMode.MATRIX, ThemeMode.TERMINAL -> true
-        ThemeMode.LIGHT -> false
+        ThemeMode.DARK, ThemeMode.MATRIX, ThemeMode.TERMINAL, ThemeMode.DRACULA,
+        ThemeMode.CATPPUCCIN_FRAPPE, ThemeMode.CATPPUCCIN_MACCHIATO, ThemeMode.CATPPUCCIN_MOCHA -> true
+        ThemeMode.LIGHT, ThemeMode.CATPPUCCIN_LATTE -> false
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
     }
 
@@ -275,7 +276,9 @@ fun AppRoot(
             screenStateHolder.SaveableStateProvider(state.screen) {
 
             when (state.screen) {
-                AppScreen.CHAT -> ChatScreen(
+                AppScreen.CHAT -> RemoteContentScope(vm, state.selectedBuffer.substringBefore("::"),
+                    state.networks.firstOrNull { it.id == state.selectedBuffer.substringBefore("::") }?.proxyType != com.boxlabs.hexdroid.connection.ProxyType.NONE, state.networks) {
+                    ChatScreen(
                     state = state,
                     onSelectBuffer = vm::openBuffer,
                     onSend = vm::sendUserInput,
@@ -331,6 +334,8 @@ fun AppRoot(
                     tourTarget = currentTourStep?.target,
                 )
 
+                }
+
                 AppScreen.NETWORKS -> NetworksScreen(
                     state = state,
 					onBack = vm::backToChat,
@@ -385,6 +390,7 @@ fun AppRoot(
                     state = state,
                     onBack = vm::backToChat,
                     onUpdate = vm::updateSettings,
+                    onSaveUploaderAuthorization = vm::saveUploaderAuthorization,
                     onRunTour = {
 	                        startTour(false)
                     },

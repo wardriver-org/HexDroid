@@ -51,6 +51,7 @@ class SettingsRepository(private val ctx: Context) {
     
         val SECRETS_MIGRATED_V2 = booleanPreferencesKey("secrets_migrated_v2")
         val QUIT_MSG_MIGRATED_V1 = booleanPreferencesKey("quit_msg_migrated_v1")
+        val WARDRIVER_PRESET_V1 = booleanPreferencesKey("wardriver_preset_v1")
     }
 
     val settingsFlow: Flow<UiSettings> = ctx.dataStore.data.map { prefs ->
@@ -173,6 +174,20 @@ class SettingsRepository(private val ctx: Context) {
     /** Atomically replace the entire network list in a single DataStore write.
      *  Use this instead of calling upsertNetwork() in a loop, which can race when
      *  multiple coroutines interleave their read-modify-write cycles. */
+    /** Seed Wardriver once on upgrade, preserving edits and later intentional deletion. */
+    suspend fun addWardriverPresetIfNeeded() {
+        ctx.dataStore.edit { prefs ->
+            if (prefs[Keys.WARDRIVER_PRESET_V1] == true) return@edit
+            val networks = parseNetworks(prefs[Keys.NETWORKS_JSON])
+            if (networks.none { it.host.equals("irc.wardriver.org", ignoreCase = true) }) {
+                val preset = defaultNetworks().first { it.id == "Wardriver" }
+                val unique = if (networks.any { it.id == preset.id }) preset.copy(id = java.util.UUID.randomUUID().toString()) else preset
+                prefs[Keys.NETWORKS_JSON] = toNetworksJson(networks + unique).toString()
+            }
+            prefs[Keys.WARDRIVER_PRESET_V1] = true
+        }
+    }
+
     suspend fun saveNetworks(profiles: List<NetworkProfile>) {
         ctx.dataStore.edit { prefs ->
             prefs[Keys.NETWORKS_JSON] = toNetworksJson(profiles).toString()
@@ -376,6 +391,15 @@ class SettingsRepository(private val ctx: Context) {
                 readReceiptsEnabled = o.optBoolean("readReceiptsEnabled", false),
                 settingsOnePage = o.optBoolean("settingsOnePage", false),
                 receiveTypingIndicator = o.optBoolean("receiveTypingIndicator", true),
+                uploadsEnabled = o.optBoolean("uploadsEnabled", false),
+                uploadProvider = runCatching { com.boxlabs.hexdroid.UploadProvider.valueOf(o.optString("uploadProvider", "DROPFO")) }.getOrDefault(com.boxlabs.hexdroid.UploadProvider.DROPFO),
+                uploadEndpoint = o.optString("uploadEndpoint", ""),
+                uploadFileField = o.optString("uploadFileField", "file"),
+                uploadResponse = runCatching { com.boxlabs.hexdroid.UploadResponse.valueOf(o.optString("uploadResponse", "TEXT_URL")) }.getOrDefault(com.boxlabs.hexdroid.UploadResponse.TEXT_URL),
+                uploadJsonKey = o.optString("uploadJsonKey", "url"),
+                uploadAllowHttp = o.optBoolean("uploadAllowHttp", false),
+                uploadAgeEnabled = o.optBoolean("uploadAgeEnabled", false),
+                uploadAgeRecipients = o.optString("uploadAgeRecipients", ""),
                 imagePreviewsEnabled = o.optBoolean("imagePreviewsEnabled", false),
                 imagePreviewsWifiOnly = o.optBoolean("imagePreviewsWifiOnly", true),
                 commandAliases = o.optJSONObject("commandAliases")?.let { ao ->
@@ -484,6 +508,15 @@ class SettingsRepository(private val ctx: Context) {
         o.put("readReceiptsEnabled", s.readReceiptsEnabled)
         o.put("settingsOnePage", s.settingsOnePage)
         o.put("receiveTypingIndicator", s.receiveTypingIndicator)
+        o.put("uploadsEnabled", s.uploadsEnabled)
+        o.put("uploadProvider", s.uploadProvider.name)
+        o.put("uploadEndpoint", s.uploadEndpoint)
+        o.put("uploadFileField", s.uploadFileField)
+        o.put("uploadResponse", s.uploadResponse.name)
+        o.put("uploadJsonKey", s.uploadJsonKey)
+        o.put("uploadAllowHttp", s.uploadAllowHttp)
+        o.put("uploadAgeEnabled", s.uploadAgeEnabled)
+        o.put("uploadAgeRecipients", s.uploadAgeRecipients)
         o.put("imagePreviewsEnabled", s.imagePreviewsEnabled)
         o.put("imagePreviewsWifiOnly", s.imagePreviewsWifiOnly)
         o.put("commandAliases", JSONObject().apply {
@@ -764,6 +797,13 @@ class SettingsRepository(private val ctx: Context) {
     }
 
     private fun defaultNetworks(): List<NetworkProfile> = listOf(
+        NetworkProfile(
+            id = "Wardriver", name = "Wardriver IRC", host = "irc.wardriver.org",
+            port = 6697, useTls = true, allowInvalidCerts = false,
+            nick = "HexDroidUser", altNick = "HexDroidUser_", username = "hexdroid",
+            realname = "HexDroid IRC for Android", saslEnabled = false,
+            saslMechanism = SaslMechanism.PLAIN, caps = CapPrefs(), autoJoin = emptyList(),
+        ),
         NetworkProfile(
             id = "AfterNET",
             name = "AfterNET",
@@ -1174,7 +1214,7 @@ class SettingsRepository(private val ctx: Context) {
     }
 }
 
-enum class ThemeMode { SYSTEM, LIGHT, DARK, MATRIX, TERMINAL }
+enum class ThemeMode { SYSTEM, LIGHT, DARK, MATRIX, TERMINAL, DRACULA, CATPPUCCIN_LATTE, CATPPUCCIN_FRAPPE, CATPPUCCIN_MACCHIATO, CATPPUCCIN_MOCHA }
 
 data class AutoJoinChannel(val channel: String, val key: String? = null) {
     fun toLine(): String = if (key.isNullOrBlank()) channel else "$channel $key"

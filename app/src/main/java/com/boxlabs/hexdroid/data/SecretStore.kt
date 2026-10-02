@@ -188,6 +188,16 @@ class SecretStore(private val ctx: Context) {
      * SOCKS proxy password (RFC 1929 user/pass auth), stored encrypted exactly like the
      * server and SASL passwords so it never lands in the networks JSON or a backup export.
      */
+    fun getUploaderToken(endpoint: String): String? {
+        val encrypted = prefs.getString("uploadToken:$endpoint", null) ?: return null
+        return decryptFromB64(encrypted)?.toString(Charsets.UTF_8)
+    }
+
+    fun setUploaderToken(endpoint: String, token: String) {
+        if (token.isEmpty()) prefs.edit().remove("uploadToken:$endpoint").apply()
+        else prefs.edit().putString("uploadToken:$endpoint", encryptToB64(token.toByteArray(Charsets.UTF_8))).apply()
+    }
+
     fun getProxyPassword(networkId: String): String? {
         val enc = prefs.getString("proxypass:$networkId", null) ?: return null
         val bytes = decryptFromB64(enc) ?: run {

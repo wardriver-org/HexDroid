@@ -25,6 +25,12 @@ jobs:
         with:
           packages: platform-tools
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.0'
+      - run: sdkmanager 'ndk;27.2.12479018'
+      - run: ./scripts/build-age-android.sh
+
       - name: Decode keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}

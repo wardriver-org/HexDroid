@@ -1516,7 +1516,7 @@ fun NetworkEditScreen(
                         CapSwitch("draft/extended-isupport", capExtendedIsupport) { capExtendedIsupport = it }
                         CapSwitch("draft/metadata-2", capMetadata2) { capMetadata2 = it }
                         CapSwitch("draft/no-implicit-names", capNoImplicitNames, alias = "no-implicit-names") { capNoImplicitNames = it }
-                        CapSwitch("soju.im/FILEHOST uploads", capFilehostUploads) { capFilehostUploads = it }
+                        CapSwitch("File uploads", capFilehostUploads) { capFilehostUploads = it }
 
                         HorizontalDivider(Modifier.padding(vertical = 8.dp))
 

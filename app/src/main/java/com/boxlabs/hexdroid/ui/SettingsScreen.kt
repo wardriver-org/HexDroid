@@ -355,6 +355,7 @@ private fun SettingsNavPanel(
     rail: Boolean,
     onSelect: (SettingsCategory) -> Unit,
     onRunTour: () -> Unit,
+    onSaveUploaderAuthorization: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     SectionRail(
@@ -441,6 +442,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onUpdate: (UiSettings.() -> UiSettings) -> Unit,
     onRunTour: () -> Unit,
+    onSaveUploaderAuthorization: (String) -> Unit = {},
     onOpenNetworks: () -> Unit,
     onOpenIgnoreList: () -> Unit,
     onOpenScripts: () -> Unit = {},
@@ -958,6 +960,8 @@ fun SettingsScreen(
                     Text(stringResource(R.string.setting_image_previews_desc), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))
                 }
             }
+
+            item { UploaderSettings(s, onUpdate, onSaveUploaderAuthorization) }
 
             if (s.imagePreviewsEnabled) {
                 item {
@@ -1986,6 +1990,12 @@ private fun ThemePicker(current: ThemeMode, onPick: (ThemeMode) -> Unit) {
         ThemeMode.MATRIX -> stringResource(R.string.theme_matrix)
         ThemeMode.TERMINAL -> stringResource(R.string.theme_terminal)
         ThemeMode.SYSTEM -> stringResource(R.string.theme_system_default)
+        ThemeMode.DRACULA -> stringResource(R.string.theme_dracula)
+        ThemeMode.CATPPUCCIN_LATTE -> stringResource(R.string.theme_catppuccin_latte)
+        ThemeMode.CATPPUCCIN_FRAPPE -> stringResource(R.string.theme_catppuccin_frappe)
+        ThemeMode.CATPPUCCIN_MACCHIATO -> stringResource(R.string.theme_catppuccin_macchiato)
+        ThemeMode.CATPPUCCIN_MOCHA -> stringResource(R.string.theme_catppuccin_mocha)
+
     }
 
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
@@ -2007,6 +2017,11 @@ private fun ThemePicker(current: ThemeMode, onPick: (ThemeMode) -> Unit) {
             DropdownMenuItem(text = { Text(stringResource(R.string.theme_light)) }, onClick = { onPick(ThemeMode.LIGHT); expanded = false })
             DropdownMenuItem(text = { Text(stringResource(R.string.settings_matrix_theme)) }, onClick = { onPick(ThemeMode.MATRIX); expanded = false })
             DropdownMenuItem(text = { Text(stringResource(R.string.theme_terminal)) }, onClick = { onPick(ThemeMode.TERMINAL); expanded = false })
+            DropdownMenuItem(text = { Text(stringResource(R.string.theme_dracula)) }, onClick = { onPick(ThemeMode.DRACULA); expanded = false })
+            DropdownMenuItem(text = { Text(stringResource(R.string.theme_catppuccin_latte)) }, onClick = { onPick(ThemeMode.CATPPUCCIN_LATTE); expanded = false })
+            DropdownMenuItem(text = { Text(stringResource(R.string.theme_catppuccin_frappe)) }, onClick = { onPick(ThemeMode.CATPPUCCIN_FRAPPE); expanded = false })
+            DropdownMenuItem(text = { Text(stringResource(R.string.theme_catppuccin_macchiato)) }, onClick = { onPick(ThemeMode.CATPPUCCIN_MACCHIATO); expanded = false })
+            DropdownMenuItem(text = { Text(stringResource(R.string.theme_catppuccin_mocha)) }, onClick = { onPick(ThemeMode.CATPPUCCIN_MOCHA); expanded = false })
             DropdownMenuItem(text = { Text(stringResource(R.string.settings_system_default)) }, onClick = { onPick(ThemeMode.SYSTEM); expanded = false })
         }
     }

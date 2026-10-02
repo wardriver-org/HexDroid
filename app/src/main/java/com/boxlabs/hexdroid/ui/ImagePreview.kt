@@ -114,14 +114,14 @@ private fun isPlayableTwitterVideoUrl(url: String?): Boolean {
     }.getOrDefault(false)
 }
 
-private suspend fun fetchTwitterMeta(data: TwitterUrlData, ctx: Context): TwitterMeta? = withContext(Dispatchers.IO) {
+private suspend fun fetchTwitterMeta(data: TwitterUrlData, ctx: Context, client: OkHttpClient): TwitterMeta? = withContext(Dispatchers.IO) {
     runCatching {
         val apiUrl = "https://api.fxtwitter.com/${data.username}/status/${data.tweetId}"
         val request = Request.Builder()
             .url(apiUrl)
             .header("User-Agent", "HexDroid IRC")
             .build()
-        httpClient(ctx).newCall(request).execute().use { response ->
+        client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return@use null
             val json = org.json.JSONObject(response.body.string())
             val tweet = json.optJSONObject("tweet") ?: return@use null
@@ -232,7 +232,7 @@ private fun httpClient(ctx: Context): OkHttpClient =
             .also { _httpClient = it }
     }
 
-private suspend fun fetchBitmap(url: String, ctx: Context): FetchResult = withContext(Dispatchers.IO) {
+private suspend fun fetchBitmap(url: String, ctx: Context, client: OkHttpClient): FetchResult = withContext(Dispatchers.IO) {
     // Validate the scheme before handing the URL to OkHttp. The Twitter/fxtwitter
     // API returns a thumbnail URL from a third-party service; if that API were ever to return
     // a non-https URL (e.g. file://, http://, or a redirect to a private IP range), we could
@@ -246,7 +246,7 @@ private suspend fun fetchBitmap(url: String, ctx: Context): FetchResult = withCo
             .header("User-Agent", "HexDroid IRC")
             .build()
 
-        httpClient(ctx).newCall(request).execute().use { response ->
+        client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return@runCatching FetchResult.Error
 
             val mime = response.body.contentType()?.let { "${it.type}/${it.subtype}" }
@@ -551,6 +551,7 @@ fun InlinePreview(
 ) {
     if (!previewsEnabled) return
 
+    val transport = LocalRemoteContent.current
     val context = LocalContext.current
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
 
@@ -572,7 +573,7 @@ fun InlinePreview(
     // Not rememberSaveable: playing state must reset when scrolled away.
     var isPlaying     by remember(url) { mutableStateOf(false) }
 
-    LaunchedEffect(url, loadRequested) {
+    LaunchedEffect(url, loadRequested, transport) {
         if (!loadRequested) return@LaunchedEffect
         if (state is PreviewState.Ready) return@LaunchedEffect
         if (wifiOnly && !isOnWifi(context)) {
@@ -581,10 +582,16 @@ fun InlinePreview(
         }
 
         state = PreviewState.Loading
+        val client = try { if (youtubeId != null) httpClient(context) else transport?.client() ?: httpClient(context) } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            state = PreviewState.Failed(context.getString(R.string.img_failed_load))
+            return@LaunchedEffect
+        }
 
         when {
             youtubeId != null -> {
-                when (val result = fetchBitmap(youtubeThumbnailUrl(youtubeId), context)) {
+                when (val result = fetchBitmap(youtubeThumbnailUrl(youtubeId), context, client)) {
                     is FetchResult.Success -> state = PreviewState.Ready(
                         bitmap = result.bitmap, isYouTube = true, videoId = youtubeId
                     )
@@ -593,12 +600,12 @@ fun InlinePreview(
                 }
             }
             twitterData != null -> {
-                val meta = fetchTwitterMeta(twitterData, context)
+                val meta = fetchTwitterMeta(twitterData, context, client)
                 if (meta == null) {
                     // Text-only tweet or API failure — nothing to show.
                     state = PreviewState.Failed(context.getString(R.string.img_no_media))
                 } else {
-                    when (val result = fetchBitmap(meta.thumbnailUrl, context)) {
+                    when (val result = fetchBitmap(meta.thumbnailUrl, context, client)) {
                         is FetchResult.Success -> state = PreviewState.Ready(
                             bitmap = result.bitmap,
                             isTwitterVideo = meta.hasVideo,
@@ -611,7 +618,7 @@ fun InlinePreview(
                 }
             }
             else -> {
-                when (val result = fetchBitmap(url, context)) {
+                when (val result = fetchBitmap(url, context, client)) {
                     is FetchResult.Success -> state = PreviewState.Ready(
                         bitmap = result.bitmap,
                         rawBytes = result.rawBytes,
@@ -663,7 +670,7 @@ fun InlinePreview(
         }
 
         is PreviewState.Ready -> {
-            val hasPlayOverlay = s.isYouTube || s.isTwitterVideo
+            val hasPlayOverlay = s.isYouTube || (s.isTwitterVideo && transport?.proxied != true)
             AnimatedContent(
                 targetState    = isPlaying,
                 transitionSpec = { fadeIn() togetherWith fadeOut() },
@@ -675,7 +682,7 @@ fun InlinePreview(
                         videoId = s.videoId,
                         onClose = { isPlaying = false },
                     )
-                } else if (playing && s.isTwitterVideo && s.twitterVideoUrl != null) {
+                } else if (playing && transport?.proxied != true && s.isTwitterVideo && s.twitterVideoUrl != null) {
                     TwitterVideoPlayer(
                         videoUrl = s.twitterVideoUrl,
                         onClose = { isPlaying = false },
@@ -688,8 +695,8 @@ fun InlinePreview(
                             .clip(RoundedCornerShape(8.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                             .then(when {
-                                s.isYouTube       -> Modifier.focusHighlight().clickable { isPlaying = true }
-                                s.isTwitterVideo  -> Modifier.focusHighlight().clickable {
+                                s.isYouTube -> Modifier.focusHighlight().clickable { isPlaying = true }
+                                s.isTwitterVideo && transport?.proxied != true -> Modifier.focusHighlight().clickable {
                                     // Play inline when we have a trusted video URL; otherwise
                                     // fall back to opening the tweet in the browser.
                                     if (s.twitterVideoUrl != null) isPlaying = true

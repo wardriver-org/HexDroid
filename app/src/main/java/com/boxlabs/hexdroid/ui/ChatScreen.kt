@@ -170,6 +170,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.ripple
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -1231,6 +1232,7 @@ fun ChatScreen(
     tourActive: Boolean = false,
     tourTarget: TourTarget? = null,
 ) {
+    val remoteTransport = LocalRemoteContent.current
     val scope = rememberCoroutineScope()
     val viewConfiguration = LocalViewConfiguration.current
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
@@ -1447,6 +1449,26 @@ fun ChatScreen(
     val liveSelected by rememberUpdatedState(selected)
     val liveInputState by rememberUpdatedState(inputState)
 
+    val composerAlive = remember { mutableStateOf(true) }
+    DisposableEffect(Unit) {
+        composerAlive.value = true
+        onDispose { composerAlive.value = false }
+    }
+    val attachments = rememberAttachmentActions(viewModel, selected.substringBefore("::"), selected) { targetKey, url ->
+        if (composerAlive.value && liveSelected == targetKey) {
+            val target = liveInputState
+            val cur = target.value
+            val sep = if (cur.text.isEmpty() || cur.text.endsWith(" ")) "" else " "
+            val text = cur.text + sep + url
+            target.value = cur.copy(text = text, selection = TextRange(text.length))
+        } else {
+            val draft = draftFor(targetKey)
+            val sep = if (draft.text.isEmpty() || draft.text.endsWith(" ")) "" else " "
+            val text = draft.text + sep + url
+            onDraftChanged(targetKey, text, text.length)
+        }
+    }
+
     // Keyed on the selected buffer because the composer state above is too
     LaunchedEffect(selected) {
         val key = selected.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
@@ -1495,6 +1517,9 @@ fun ChatScreen(
     // Formatting items appended to the input's text menu, after Cut/Copy/Paste. They act on the
     // selection, or on what's typed next when nothing is selected.
     val formatMenu: TextContextMenuBuilderScope.() -> Unit = {
+        item(key = "hexdroid.paste.attachment", label = "Paste file or image") {
+            attachments.paste(); close()
+        }
         separator()
         item(key = "hexdroid.format.bold", label = formatLabels[0]) {
             input = toggleFormat(input, '\u0002'); close()
@@ -1587,20 +1612,12 @@ fun ChatScreen(
     val canTopic = isChannel && isHalfOpOrAbove
     val canMode  = isChannel && isOp
     val isIrcOper = state.connections[selNetId]?.isIrcOper == true
-    val selNetUnproxied = state.networks.firstOrNull { it.id == selNetId }?.proxyType ==
-        com.boxlabs.hexdroid.connection.ProxyType.NONE
     val hasReactionSupport = state.connections[selNetId]?.hasReactionSupport == true
     // draft/metadata-2 display names for this network, keyed by lowercased nick.
     val metadataDisplayNames = state.connections[selNetId]?.displayNames ?: emptyMap()
-    // draft/metadata-2 avatars, same keying. Rendered in the nick list only, and only
-    // when the user has opted into image previews AND this profile is unproxied - an
-    // avatar URL is chosen by the remote user, so fetching it from a Tor/SOCKS profile
-    // would bypass the proxy and leak the user's IP (same rule as filehost uploads).
+    // Avatars follow the selected network's HTTP transport and preview opt-in.
     val metadataAvatars: Map<String, String> =
-        if (state.settings.imagePreviewsEnabled &&
-            state.networks.firstOrNull { it.id == selNetId }?.proxyType ==
-                com.boxlabs.hexdroid.connection.ProxyType.NONE
-        ) state.connections[selNetId]?.avatarUrls ?: emptyMap()
+        if (state.settings.imagePreviewsEnabled) state.connections[selNetId]?.avatarUrls ?: emptyMap()
         else emptyMap()
     // draft/metadata-2 nick colours (6 hex digits, no #), keyed by lowercased nick.
     // Applied below a manual own-nick override, above the hash colour.
@@ -2401,15 +2418,15 @@ fun ChatScreen(
                     ) {
                         // draft/metadata-2 avatar: a small circle before the nick that scales
                         // with the nick font, so it grows when the member pane is widened.
-                        // Gated by the metadataAvatars map (previews on, https, unproxied).
+                        // Gated by the metadataAvatars map (previews on, https, network transport).
                         // A row without an avatar reserves the same width when ANY nick in
                         // the channel has one, so the nicks stay left-aligned with each other
                         // instead of stepping in and out as avatars load.
                         val avatarSize = (nickFontSp + 4f).dp
                         val avatarGap = (nickFontSp * 0.3f).dp
                         if (nickAvatar != null) {
-                            var avatarBmp by remember(nickAvatar) { mutableStateOf(RemoteImage.cached(nickAvatar)) }
-                            LaunchedEffect(nickAvatar) { if (avatarBmp == null) avatarBmp = RemoteImage.fetch(nickAvatar) }
+                            var avatarBmp by remember(nickAvatar, remoteTransport) { mutableStateOf(RemoteImage.cached(nickAvatar, remoteTransport)) }
+                            LaunchedEffect(nickAvatar, remoteTransport) { if (avatarBmp == null) avatarBmp = RemoteImage.fetch(nickAvatar, remoteTransport) }
                             avatarBmp?.let { bmp ->
                                 Image(
                                     bitmap = bmp,
@@ -3563,7 +3580,7 @@ fun ChatScreen(
                             colorizeNicks = state.settings.colorizeNicks,
                             mircColorsEnabled = state.settings.mircColorsEnabled,
                             ansiColorsEnabled = state.settings.ansiColorsEnabled,
-                            imagePreviewsEnabled = state.settings.imagePreviewsEnabled && selNetUnproxied,
+                            imagePreviewsEnabled = state.settings.imagePreviewsEnabled,
                             imagePreviewsWifiOnly = state.settings.imagePreviewsWifiOnly,
                             nickColor = ::nickColor,
                             displayNick = ::displayNick,
@@ -4212,63 +4229,8 @@ fun ChatScreen(
                         }
                     }
                 }
-                // Filehost attach button: shown when the server advertises a
-                // soju.im/FILEHOST upload endpoint (soju, Ergo, standalone filehost
-                // servers). Picks a document, uploads it, and appends the resulting
-                // URL to the input so the user can add text before sending.
-                val filehostUrl = state.connections[selNetId]?.filehostUrl
-                if (viewModel != null && filehostUrl != null) {
-                    var uploading by remember { mutableStateOf(false) }
-                    val ctxUpload = LocalContext.current
-                    val filePicker = rememberLauncherForActivityResult(
-                        ActivityResultContracts.OpenDocument()
-                    ) { uri ->
-                        if (uri != null && !uploading) {
-                            uploading = true
-                            val startKey = selected
-                            viewModel.uploadFileToFilehost(selNetId, uri) { url, err ->
-                                uploading = false
-                                if (url != null) {
-                                    if (liveSelected == startKey) {
-                                        val target = liveInputState
-                                        val cur = target.value
-                                        val sep = if (cur.text.isEmpty() || cur.text.endsWith(" ")) "" else " "
-                                        val newText = cur.text + sep + url
-                                        target.value = cur.copy(
-                                            text = newText,
-                                            selection = TextRange(newText.length)
-                                        )
-                                    } else if (startKey.isNotBlank()) {
-                                        // The user moved on; the link goes into that buffer's draft.
-                                        val draft = draftFor(startKey)
-                                        val sep = if (draft.text.isEmpty() || draft.text.endsWith(" ")) "" else " "
-                                        val newText = draft.text + sep + url
-                                        onDraftChanged(startKey, newText, newText.length)
-                                    }
-                                } else {
-                                    Toast.makeText(ctxUpload, err ?: "Upload failed", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
-                    }
-                    if (uploading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        IconButton(
-                            onClick = { filePicker.launch(arrayOf("*/*")) },
-                            modifier = Modifier.size(28.dp).focusHighlight(),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.AttachFile,
-                                contentDescription = stringResource(R.string.chat_cd_upload_file),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                    }
+                if (state.settings.uploadsEnabled && viewModel != null && state.connections[selNetId] != null) {
+                    AttachmentButton(attachments)
                 }
                 // Build the text style for the input based on active formatting
                 val defaultTextColor = MaterialTheme.colorScheme.onSurface
@@ -4319,6 +4281,10 @@ fun ChatScreen(
                             // attached to Android tablets, where pressing Enter would otherwise
                             // insert a newline rather than send. Preview catches the key first.
                             if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                            if ((ev.key == Key.V && ev.isCtrlPressed) ||
+                                (ev.key == Key.Insert && ev.isShiftPressed)) {
+                                if (attachments.paste()) return@onPreviewKeyEvent true
+                            }
                             when (ev.key) {
                                 Key.Enter, Key.NumPadEnter -> {
                                     // Shift+Enter inserts a newline (multiline editing); plain
@@ -6290,8 +6256,8 @@ fun ChatScreen(
                         // Avatar (draft/metadata-2), gated identically to the message rows:
                         // only when image previews are on and this profile is unproxied.
                         if (sheetAvatar != null) {
-                            var bmp by remember(sheetAvatar) { mutableStateOf(RemoteImage.cached(sheetAvatar)) }
-                            LaunchedEffect(sheetAvatar) { if (bmp == null) bmp = RemoteImage.fetch(sheetAvatar) }
+                            var bmp by remember(sheetAvatar, remoteTransport) { mutableStateOf(RemoteImage.cached(sheetAvatar, remoteTransport)) }
+                            LaunchedEffect(sheetAvatar, remoteTransport) { if (bmp == null) bmp = RemoteImage.fetch(sheetAvatar, remoteTransport) }
                             bmp?.let {
                                 Image(
                                     bitmap = it,

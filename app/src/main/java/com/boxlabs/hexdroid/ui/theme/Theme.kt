@@ -147,6 +147,38 @@ private val TerminalColorScheme = darkColorScheme(
     scrim               = Color(0xCC000000),
 )
 
+/** Named palettes use fixed colours, independent of wallpaper and system mode. */
+private fun namedPalette(light: Boolean, base: Long, text: Long, panel: Long, muted: Long,
+                         accent: Long, secondary: Long, error: Long) =
+    (if (light) lightColorScheme() else darkColorScheme()).copy(
+        primary = Color(accent), onPrimary = Color(base),
+        primaryContainer = Color(panel), onPrimaryContainer = Color(accent),
+        secondary = Color(secondary), onSecondary = Color(base),
+        secondaryContainer = Color(panel), onSecondaryContainer = Color(secondary),
+        tertiary = Color(secondary), onTertiary = Color(base),
+        tertiaryContainer = Color(panel), onTertiaryContainer = Color(secondary),
+        background = Color(base), onBackground = Color(text),
+        surface = Color(base), onSurface = Color(text),
+        surfaceVariant = Color(panel), onSurfaceVariant = Color(text),
+        surfaceDim = Color(panel), surfaceBright = Color(panel),
+        surfaceContainerLowest = Color(base), surfaceContainerLow = Color(base),
+        surfaceContainer = Color(panel), surfaceContainerHigh = Color(panel),
+        surfaceContainerHighest = Color(panel),
+        outline = Color(muted), outlineVariant = Color(panel),
+        error = Color(error), onError = Color(base),
+        errorContainer = Color(panel), onErrorContainer = Color(error),
+        inverseSurface = Color(text), inverseOnSurface = Color(base), inversePrimary = Color(accent),
+        surfaceTint = Color(accent),
+    )
+
+private val NamedPalettes = mapOf(
+    ThemeMode.DRACULA to namedPalette(false, 0xFF282A36, 0xFFF8F8F2, 0xFF44475A, 0xFF6272A4, 0xFFBD93F9, 0xFF8BE9FD, 0xFFFF5555),
+    ThemeMode.CATPPUCCIN_LATTE to namedPalette(true, 0xFFEFF1F5, 0xFF4C4F69, 0xFFCCD0DA, 0xFF6C6F85, 0xFF8839EF, 0xFF007F8B, 0xFFD20F39),
+    ThemeMode.CATPPUCCIN_FRAPPE to namedPalette(false, 0xFF303446, 0xFFC6D0F5, 0xFF414559, 0xFF838BA7, 0xFFCA9EE6, 0xFF99D1DB, 0xFFE78284),
+    ThemeMode.CATPPUCCIN_MACCHIATO to namedPalette(false, 0xFF24273A, 0xFFCAD3F5, 0xFF363A4F, 0xFF8087A2, 0xFFC6A0F6, 0xFF91D7E3, 0xFFED8796),
+    ThemeMode.CATPPUCCIN_MOCHA to namedPalette(false, 0xFF1E1E2E, 0xFFCDD6F4, 0xFF313244, 0xFF7F849C, 0xFFCBA6F7, 0xFF89DCEB, 0xFFF38BA8),
+)
+
 /**
  * Colours for the accent buttons in the message input bar.
  * Held here so a theme can carry its own.
@@ -197,12 +229,14 @@ fun HexDroidIRCTheme(
     val isMatrix = themeMode == ThemeMode.MATRIX
     val isTerminal = themeMode == ThemeMode.TERMINAL
     val resolvedDark = darkTheme ?: when (themeMode) {
-        ThemeMode.DARK, ThemeMode.MATRIX, ThemeMode.TERMINAL -> true
-        ThemeMode.LIGHT -> false
+        ThemeMode.DARK, ThemeMode.MATRIX, ThemeMode.TERMINAL, ThemeMode.DRACULA,
+        ThemeMode.CATPPUCCIN_FRAPPE, ThemeMode.CATPPUCCIN_MACCHIATO, ThemeMode.CATPPUCCIN_MOCHA -> true
+        ThemeMode.LIGHT, ThemeMode.CATPPUCCIN_LATTE -> false
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
     }
 
     val colorScheme = when {
+        themeMode in NamedPalettes -> NamedPalettes.getValue(themeMode)
         isMatrix   -> MatrixColorScheme
         isTerminal -> TerminalColorScheme
         // SYSTEM theme: honour the wallpaper-derived palette on Android 12+ so the app
@@ -228,6 +262,9 @@ fun HexDroidIRCTheme(
     val accents = when {
         isMatrix -> MatrixAccents
         isTerminal -> TerminalAccents
+        themeMode in NamedPalettes -> AccentColors(
+            listOf(colorScheme.primary, colorScheme.secondary),
+            listOf(colorScheme.secondary, colorScheme.primary), colorScheme.onPrimary)
         else -> DefaultAccents
     }
 

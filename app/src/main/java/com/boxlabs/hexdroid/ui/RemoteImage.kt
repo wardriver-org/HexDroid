@@ -26,15 +26,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import java.io.ByteArrayOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * Bounded image fetcher for server-supplied images (network icons, metadata avatars). Callers must
- * first check HTTPS, the image-previews opt-in and an unproxied profile, since this bypasses any
- * proxy. Byte and pixel caps, short timeouts, no redirects; failures mean no image.
+ * first check the image-previews opt-in and supply the network transport for proxied profiles. Byte and pixel caps, short timeouts, no redirects; failures mean no image.
  */
-object RemoteImage {
+internal object RemoteImage {
 
     /** Decoded images keyed by resolved URL, least-recently-used. */
     private val cache = object : LinkedHashMap<String, ImageBitmap>(16, 0.75f, true) {
@@ -61,56 +58,58 @@ object RemoteImage {
      */
     private const val MAX_EDGE_PX = 256
 
-    private const val CONNECT_TIMEOUT_MS = 5_000
-    private const val READ_TIMEOUT_MS = 5_000
-
     /** Cached bitmap for [url], or null when it has not been fetched yet. */
-    fun cached(url: String): ImageBitmap? = synchronized(cache) { cache[url] }
+    private fun key(url: String, transport: RemoteContentTransport?) =
+        "${transport?.cacheScope ?: "direct"}:$url"
+
+    fun cached(url: String, transport: RemoteContentTransport? = null): ImageBitmap? =
+        synchronized(cache) { cache[key(url, transport)] }
 
     /**
      * Fetch and decode [url], sampled down to [MAX_EDGE_PX]. Returns null on any failure,
      * oversize response, or undecodable payload. Safe to call repeatedly: a cached result
      * short-circuits and concurrent calls for one URL share a single request.
      */
-    suspend fun fetch(url: String): ImageBitmap? {
-        cached(url)?.let { return it }
+    suspend fun fetch(url: String, transport: RemoteContentTransport? = null): ImageBitmap? {
+        val key = key(url, transport)
+        cached(url, transport)?.let { return it }
         val request = synchronized(inFlight) {
-            inFlight[url] ?: scope.async { download(url) }.also { job ->
-                inFlight[url] = job
-                job.invokeOnCompletion { synchronized(inFlight) { inFlight.remove(url) } }
+            inFlight[key] ?: scope.async { download(url, transport, key) }.also { job ->
+                inFlight[key] = job
+                job.invokeOnCompletion { synchronized(inFlight) { inFlight.remove(key) } }
             }
         }
         return request.await()
     }
 
-    private fun download(url: String): ImageBitmap? = runCatching {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = CONNECT_TIMEOUT_MS
-        conn.readTimeout = READ_TIMEOUT_MS
-        conn.instanceFollowRedirects = false
-        try {
-            if (conn.responseCode !in 200..299) return@runCatching null
-            if (conn.contentLengthLong > MAX_BYTES) return@runCatching null
-            val buf = ByteArrayOutputStream()
-            conn.inputStream.use { input ->
-                // Manual copy loop rather than readNBytes: minSdk is 26 and
-                // that API landed in Android 13 (API 33).
-                val chunk = ByteArray(16 * 1024)
-                while (true) {
-                    val n = input.read(chunk)
-                    if (n < 0) break
-                    buf.write(chunk, 0, n)
-                    if (buf.size() > MAX_BYTES) return@runCatching null
+    private val directClient = com.boxlabs.hexdroid.RemoteContentHttp.client(
+        com.boxlabs.hexdroid.connection.ProxyConfig())
+
+    private suspend fun download(url: String, transport: RemoteContentTransport?, key: String): ImageBitmap? = try {
+        if (!url.startsWith("https://", ignoreCase = true)) null else {
+            val client = (transport?.client() ?: directClient).newBuilder()
+                .followRedirects(false).build()
+            client.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { response ->
+                if (!response.isSuccessful || response.body.contentLength() > MAX_BYTES) null else {
+                    val buf = ByteArrayOutputStream()
+                    response.body.byteStream().use readImage@ { input ->
+                        val chunk = ByteArray(16 * 1024)
+                        while (true) {
+                            val n = input.read(chunk)
+                            if (n < 0) break
+                            if (buf.size() + n > MAX_BYTES) return@readImage null
+                            buf.write(chunk, 0, n)
+                        }
+                        decodeSampled(buf.toByteArray())?.asImageBitmap()?.also { bmp ->
+                            synchronized(cache) { cache[key] = bmp }
+                        }
+                    }
                 }
             }
-            val bytes = buf.toByteArray()
-            decodeSampled(bytes)?.asImageBitmap()?.also { bmp ->
-                synchronized(cache) { cache[url] = bmp }
-            }
-        } finally {
-            conn.disconnect()
         }
-    }.getOrNull()
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (_: Exception) { null }
 
     /** Decode [bytes] with the longest edge no larger than [MAX_EDGE_PX]. */
     private fun decodeSampled(bytes: ByteArray): android.graphics.Bitmap? {

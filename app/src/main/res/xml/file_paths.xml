@@ -5,4 +5,5 @@
     <files-path name="logs" path="logs/" />
     <files-path name="dcc" path="dcc/" />
     <cache-path name="dcc_out" path="dcc_out/" />
+    <cache-path name="attachments" path="attachments/" />
 </paths>

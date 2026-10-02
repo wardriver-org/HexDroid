@@ -135,6 +135,8 @@ kotlin {
     }
 }
 dependencies {
+    implementation(files("libs/agebridge.aar"))
+    implementation("androidx.exifinterface:exifinterface:1.4.2")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
@@ -173,3 +175,12 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
+
+val buildAgeBridge by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir)
+    commandLine("bash", "scripts/build-age-android.sh")
+    inputs.dir(rootProject.file("native/agebridge"))
+    inputs.file(rootProject.file("scripts/build-age-android.sh"))
+    outputs.file(file("libs/agebridge.aar"))
+}
+tasks.named("preBuild").configure { dependsOn(buildAgeBridge) }

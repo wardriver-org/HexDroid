@@ -410,6 +410,15 @@ data class UiSettings(
     val settingsOnePage: Boolean = false,
 
     /** Show inline image and YouTube thumbnail previews in chat. */
+    val uploadsEnabled: Boolean = false,
+    val uploadProvider: UploadProvider = UploadProvider.DROPFO,
+    val uploadEndpoint: String = "",
+    val uploadFileField: String = "file",
+    val uploadResponse: UploadResponse = UploadResponse.TEXT_URL,
+    val uploadJsonKey: String = "url",
+    val uploadAllowHttp: Boolean = false,
+    val uploadAgeEnabled: Boolean = false,
+    val uploadAgeRecipients: String = "",
     val imagePreviewsEnabled: Boolean = false,
     /** When true, only load previews on Wi-Fi to save mobile data. */
     val imagePreviewsWifiOnly: Boolean = true,
@@ -1457,6 +1466,13 @@ class IrcViewModel(
      * connections go through the same proxy as the IRC link, and listen-based DCC is unavailable
      * behind one. The password is loaded for proxies that authenticate per connection.
      */
+    /** Load encrypted proxy credentials off the UI thread for remote content requests. */
+    suspend fun remoteContentProxy(netId: String): com.boxlabs.hexdroid.connection.ProxyConfig =
+        withContext(Dispatchers.IO) {
+            check(_state.value.networks.any { it.id == netId }) { "Unknown network" }
+            proxyForNetwork(netId)
+        }
+
     private fun proxyForNetwork(netId: String): com.boxlabs.hexdroid.connection.ProxyConfig {
         val profile = _state.value.networks.firstOrNull { it.id == netId }
             ?: return com.boxlabs.hexdroid.connection.ProxyConfig()
@@ -2200,6 +2216,7 @@ class IrcViewModel(
         viewModelScope.launch {
             repo.migrateLegacySecretsIfNeeded()
             repo.migrateLegacyQuitMessageIfNeeded()
+            repo.addWardriverPresetIfNeeded()
             var prevLogFolderUri: String? = null
             var lastPurgeKey: Triple<Boolean, Int, String?>? = null
             repo.settingsFlow.collect { s ->
@@ -12797,17 +12814,20 @@ private fun moveNickAcrossChannels(netId: String, oldNick: String, newNick: Stri
         PreparedDccSend(file = out, offerName = out.name)
     }
 
-    /**
-     * Upload a picked document to the network's soju.im/FILEHOST endpoint; [onDone] gets (url,
-     * error) on the main thread, exactly one non-null. Credentials are the connection's SASL PLAIN
-     * identity and password, or the server password for PASS-authenticated bouncers; SCRAM and
-     * EXTERNAL passwords are never sent. Refused on proxied networks, since the upload would bypass
-     * the proxy.
-     */
+    /** Upload a picked document to drop.fo. Never sends IRC credentials or bypasses a proxy. */
+    fun saveUploaderAuthorization(value: String) {
+        val endpoint = _state.value.settings.uploadConfig().endpoint
+        viewModelScope.launch(Dispatchers.IO) { repo.secretStore.setUploaderToken(endpoint, value) }
+    }
+
     fun uploadFileToFilehost(netId: String, uri: android.net.Uri, onDone: (url: String?, error: String?) -> Unit) {
+        val settings = _state.value.settings
+        if (!settings.uploadsEnabled) {
+            onDone(null, "Uploads are disabled. Enable them in Settings → Media → File uploader.")
+            return
+        }
         val cfg = runtimes[netId]?.client?.config
-        val uploadUrl = _state.value.connections[netId]?.filehostUrl
-        if (cfg == null || uploadUrl.isNullOrBlank()) {
+        if (cfg == null) {
             onDone(null, appContext.getString(R.string.vm_upload_unsupported))
             return
         }
@@ -12819,63 +12839,22 @@ private fun moveNickAcrossChannels(netId: String, oldNick: String, newNick: Stri
             onDone(null, appContext.getString(R.string.vm_upload_no_proxy))
             return
         }
-        val saslCfg = cfg.sasl as? SaslConfig.Enabled
-        val baseUser = saslCfg?.authcid?.takeIf { it.isNotBlank() } ?: cfg.nick
-        val username = cfg.effectiveAuthIdentity(baseUser)
-        val secret = when {
-            saslCfg == null -> cfg.serverPassword
-            saslCfg.mechanism == SaslMechanism.PLAIN -> saslCfg.password ?: cfg.serverPassword
-            else -> cfg.serverPassword
-        }
-        val uploadHost = runCatching { java.net.URI(uploadUrl.trim()).host }.getOrNull().orEmpty()
-        val sameSite = FilehostUpload.sameSite(uploadHost, cfg.host)
-        val password = secret?.takeIf { sameSite }
-        val withheldReason = when {
-            secret != null && !sameSite -> "the upload host $uploadHost is not part of ${cfg.host}"
-            secret == null && saslCfg != null && saslCfg.mechanism != SaslMechanism.PLAIN ->
-                "logins using ${saslCfg.mechanism.name.replace('_', '-')} do not share their password"
-            else -> null
-        }
         viewModelScope.launch(Dispatchers.IO) {
             val result = try {
                 val name = queryDisplayName(uri)
                     ?: runCatching { java.net.URLDecoder.decode(uri.lastPathSegment ?: "", "UTF-8") }.getOrNull()
-                val size = try {
-                    appContext.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
-                        if (c.moveToFirst()) {
-                            val idx = c.getColumnIndex(OpenableColumns.SIZE)
-                            if (idx >= 0 && !c.isNull(idx)) c.getLong(idx) else -1L
-                        } else -1L
-                    } ?: -1L
-                } catch (_: Throwable) { -1L }
                 val mime = runCatching { appContext.contentResolver.getType(uri) }.getOrNull()
 
-                fun send(declaredLength: Long): FilehostUpload.Result {
+                fun send(): FilehostUpload.Result {
                     val stream = appContext.contentResolver.openInputStream(uri)
                         ?: return FilehostUpload.Result(null, appContext.getString(R.string.vm_file_open_failed))
                     return stream.use { inp ->
-                        FilehostUpload.upload(
-                            uploadUrl = uploadUrl,
-                            username = username,
-                            password = password,
-                            fileName = name,
-                            mimeType = mime,
-                            contentLength = declaredLength,
-                            input = inp,
-                            connectionUsesTls = cfg.useTls,
-                            withheldReason = withheldReason,
-                        )
+                        MultipartUploader.upload(settings.uploadConfig(repo.secretStore.getUploaderToken(settings.uploadConfig().endpoint)),
+                            fileName = name, mimeType = mime, input = inp, cacheDir = appContext.cacheDir)
                     }
                 }
 
-                val first = send(size)
-                // A provider's reported SIZE can disagree with what the stream actually
-                // yields: cloud-backed documents report a stale or approximate size, and a
-                // file edited between the query and the read is a different length. The
-                // fixed-length request then refuses the body mid-write. Resend without a
-                // declared length rather than making the user pick the file again.
-                if (first.ok || !FilehostUpload.isLengthMismatch(first.error)) first
-                else send(-1L)
+                send()
             } catch (t: Throwable) {
                 FilehostUpload.Result(null, appContext.getString(R.string.vm_upload_failed, t.message ?: t.javaClass.simpleName))
             }

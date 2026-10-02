@@ -190,3 +190,85 @@ Full license text in [LICENSE](LICENSE).
 *Built with [Kotlin](https://kotlinlang.org/) · [Jetpack Compose](https://developer.android.com/jetpack/compose) · [Material Design 3](https://m3.material.io/)*
 
 </div>
+
+### Wardriver fork additions
+
+File and image uploads are **disabled by default**. Enable them under
+**Settings → Media → File uploader**. drop.fo is preselected for the first opt-in;
+your selected provider is preserved when toggling uploads off and back on.
+
+Choose drop.fo, 0x0.st, Catbox, Litterbox (24-hour retention), a self-hosted
+rustypaste instance, or a custom multipart endpoint. Custom uploaders support a
+configurable file field and response URLs in plain text, a Location header, or a
+JSON key (including nested paths such as `data.url`). rustypaste and custom
+endpoints support an optional Authorization header stored encrypted, scoped to
+the exact endpoint, and excluded from settings exports. HTTPS is required unless
+you explicitly allow HTTP for your own server.
+
+Uploaded links are added to the draft for review before sending. Files follow the
+selected service's retention rules. IRC credentials are never sent; uploads are
+blocked on proxied networks and when the per-network upload switch is off. A
+temporary copy in the app's private cache supplies the exact request size and is
+deleted after the attempt. A failed upload never falls back to a different host.
+
+Settings → Appearance → Theme includes **Dracula** and all four Catppuccin flavours:
+**Latte**, **Frappé**, **Macchiato**, and **Mocha**. Latte is light; the others are dark.
+
+Remote chat images, animated GIFs, Twitter/X metadata and thumbnails,
+and chat avatars follow the selected network's SOCKS5 or SOCKS4a
+settings. Configure the proxy in the network editor; SOCKS5 username/password
+authentication is supported. Destination hostnames resolve at the proxy, and a
+failed or invalid proxy never falls back to a direct connection. Preview opt-in,
+Wi-Fi restrictions, HTTPS checks, and image size limits still apply. Twitter/X embedded video stays disabled on proxied profiles. YouTube thumbnails
+and embedded playback use a direct connection, including on proxied networks. Network icons remain hidden for proxied profiles.
+
+The default server list includes **Wardriver IRC**, `ircs://irc.wardriver.org:6697`,
+with TLS enabled and normal certificate validation. Existing saved profiles are
+preserved; the preset is also added once on upgrade, without duplicating an
+existing Wardriver profile or restoring it after you delete it.
+
+The attachment menu offers photo/video capture, photo/document selection, text
+snippets, and recent upload links. Paste a copied image or file with **Paste file
+or image** in the chatbox context menu or attachment menu, or **Ctrl+V** / **Shift+Insert**
+on a hardware keyboard. Plain-text paste keeps its usual behaviour. Multiple
+attachments upload in sequence to the selected provider and add links to the original chat's
+draft. Nothing is sent to IRC until you press Send. Upload history stays on-device
+and includes expiring links rather than permanent copies of the files.
+
+### Image privacy and age-encrypted uploads
+
+Every image passes through metadata removal before any upload, including files
+whose actual image type differs from the advertised MIME type. Supported images
+are decoded, oriented, and re-encoded as PNG without source EXIF, GPS, camera,
+XMP, or IPTC metadata. Animated images become a still frame. Unsupported images
+or images over 32 megapixels are rejected rather than uploaded unchanged.
+
+Enable **Encrypt uploads with age** in the uploader settings and paste one or
+more native `age1…` public recipient keys, one per line. Include your own public
+key if you also need to decrypt. The official Go age library encrypts the cleaned
+image or document locally before upload; the host receives `attachment.age` and
+no private keys. This file encryption is separate from HexDroid's IRC +AGE chat
+protocol. Each configured recipient can decrypt the same file independently.
+
+The recipient creates a private identity and shares only its public recipient:
+
+```sh
+age-keygen -o key.txt
+age-keygen -y key.txt
+```
+
+Download the shared URL as `attachment.age`, then decrypt an uploaded image:
+
+```sh
+age -d -i key.txt -o image.png attachment.age
+```
+
+For a document, choose its original filename instead of `image.png`. Keep
+`key.txt` private. Losing all recipient private keys makes the upload unreadable.
+Recipients on Android can use an age-compatible decryptor or the age CLI in
+Termux. Encrypted files cannot display as ordinary inline image previews.
+
+Native builds require Go 1.26 and Android NDK 27.2.12479018. Run
+`scripts/build-age-android.sh` to generate the local agebridge AAR; Android CI
+runs this step and the official-age round-trip test before building the APK.
+The Gradle pre-build step also generates the AAR when it is missing.

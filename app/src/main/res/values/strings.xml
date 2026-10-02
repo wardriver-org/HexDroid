@@ -490,7 +490,7 @@
     <string name="chat_cd_close_label">Close %1$s</string>
     <string name="chat_cd_cancel_reply">Cancel reply</string>
     <string name="chat_cd_encryption_configured">Encryption configured (%1$s, %2$s)</string>
-    <string name="chat_cd_upload_file">Upload file to server</string>
+    <string name="chat_cd_upload_file">Upload file</string>
     <string name="chat_reply_to">Reply to %1$s</string>
     <string name="chat_delete_message">Delete message</string>
     <string name="chat_delete_message_desc">Removes it for everyone via the server</string>
@@ -1782,4 +1782,9 @@
     <string name="vm_status_waiting_wifi">Waiting for Wi-Fi…</string>
     <string name="vm_waiting_for_wifi">Waiting for Wi-Fi before connecting.</string>
     <string name="vm_webpush_failed">Push notifications: the server rejected the subscription (%1$s: %2$s).</string>
+    <string name="theme_dracula">Dracula</string>
+    <string name="theme_catppuccin_latte">Catppuccin Latte</string>
+    <string name="theme_catppuccin_frappe">Catppuccin Frappé</string>
+    <string name="theme_catppuccin_macchiato">Catppuccin Macchiato</string>
+    <string name="theme_catppuccin_mocha">Catppuccin Mocha</string>
 </resources>
