@@ -6,7 +6,8 @@ android {
     namespace = "com.boxlabs.hexdroid"
     compileSdk = 37
     defaultConfig {
-        applicationId = "com.boxlabs.hexdroid"
+        // Separate install identity for the independently signed Wardriver fork.
+        applicationId = "org.wardriver.hexdroid"
         minSdk = 26
         targetSdk = 37
         versionCode = 34
