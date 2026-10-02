@@ -288,6 +288,16 @@ fun EncryptionDialog(
                     )
                 }
 
+                if (pickedScheme == E2eScheme.BLOWFISH &&
+                    target.isNotBlank() && target.first() !in "#&!+*" && !target.startsWith("DCCCHAT:")) {
+                    Text("DH1080 exchanges a legacy FiSH ECB key for private IRC messages, including Wraith. It replaces this chat’s key on success and does not authenticate the peer or encrypt DCC.",
+                        style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = {
+                        viewModel.startFishKeyExchange(networkId, target)
+                        onDismiss()
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Exchange FiSH key (DH1080)") }
+                }
+
                 // ── Manage existing keyed scheme (regenerate / clear) ─────────────
                 val curManage = current
                 if (curManage != null && !pendingClear && !pendingRegen) {

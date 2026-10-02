@@ -40,7 +40,7 @@ class E2eCodec(
         cipherCache.computeIfAbsent(entry) { e ->
             when (e.scheme) {
                 E2eScheme.AGM      -> AesGcmCipher(e.key)
-                E2eScheme.BLOWFISH -> BlowfishCipher(e.key)
+                E2eScheme.BLOWFISH -> BlowfishCipher(e.key, useEcb = e.fishEcb)
                 // +AGE is a group/handshake scheme carried by AgeChannel/AgeWire, never
                 // stored as a 1:1 E2eKeyStore entry, so this branch is unreachable here;
                 // it exists only to keep the `when` exhaustive after registering +AGE.

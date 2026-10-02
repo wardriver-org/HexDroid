@@ -13,9 +13,9 @@ import javax.crypto.spec.SecretKeySpec
  * does).
  *   +OK <fishbase64>  ECB, fishlim's base64 alphabet, 12 chars per 8-byte block
  *   +OK *<base64>     CBC, random 8-byte IV, standard base64, zero padding
- * Decoding tries CBC when the payload starts with `*`, else ECB; encoding always uses CBC.
+ * Decoding tries CBC when the payload starts with `*`, else ECB; encoding uses CBC unless a legacy DH1080 exchange explicitly selects ECB.
  */
-internal class BlowfishCipher(private val key: ByteArray) : E2eCipher {
+internal class BlowfishCipher(private val key: ByteArray, private val useEcb: Boolean = false) : E2eCipher {
     init {
         require(key.isNotEmpty()) { "Blowfish key cannot be empty" }
         // javax.crypto's Blowfish accepts 32-448 bits (4-56 bytes); under 4 we
@@ -30,9 +30,14 @@ internal class BlowfishCipher(private val key: ByteArray) : E2eCipher {
     private val rng = SecureRandom()
 
     override fun encrypt(plaintext: String, aadContext: String): String {
+        if (useEcb) {
+            val cipher = Cipher.getInstance("Blowfish/ECB/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+            val bytes = cipher.doFinal(zeroPad(plaintext.toByteArray(StandardCharsets.UTF_8)))
+            return "${scheme.wirePrefix} ${encodeFishBase64(bytes)}"
+        }
         // Emit CBC mode (`+OK *…`) - more secure than ECB and supported by every
-        // modern fishlim build. ECB encoding is deliberately not exposed because
-        // there is no upside to producing it for new messages.
+        // modern fishlim build. Legacy ECB is enabled only for an explicit DH1080 exchange.
         //
         // JCE's PKCS5 unpadding rejects fishlim's zero-padded ciphertext as a bad pad,
         // so decryption fails outright. We therefore use NoPadding and pad manually.
@@ -132,6 +137,17 @@ internal class BlowfishCipher(private val key: ByteArray) : E2eCipher {
         private val FISH_INDEX: IntArray = IntArray(128).also { idx ->
             idx.fill(-1)
             for ((i, c) in FISH_ALPHABET.withIndex()) idx[c.code] = i
+        }
+
+        internal fun encodeFishBase64(bytes: ByteArray): String = buildString {
+            require(bytes.size % BLOCK_SIZE == 0)
+            for (offset in bytes.indices step BLOCK_SIZE) {
+                for (wordOffset in listOf(offset + 4, offset)) {
+                    var word = 0L
+                    for (j in 0..3) word = (word shl 8) or (bytes[wordOffset + j].toLong() and 255)
+                    repeat(6) { append(FISH_ALPHABET[(word and 63).toInt()]); word = word ushr 6 }
+                }
+            }
         }
 
         internal fun decodeFishBase64(s: String): ByteArray? {

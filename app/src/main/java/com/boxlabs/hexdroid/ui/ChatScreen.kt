@@ -142,6 +142,8 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -1748,6 +1750,7 @@ fun ChatScreen(
 
     var overflowExpanded by remember { mutableStateOf(false) }
     var launcherExpanded by remember { mutableStateOf(false) }
+    var showWraithPanel by remember(selected) { mutableStateOf(false) }
 
     // Tour: on the "More actions" step, open the overflow menu so users can see what's inside.
     LaunchedEffect(tourActive, tourTarget) {
@@ -2924,10 +2927,13 @@ fun ChatScreen(
                     // touch target, which overflows a bar shorter than that and is clipped
                     // by it, taking the top and bottom of the focus ring with it.
                     if (isWide) {
+                        val serverListAction = stringResource(
+                            if (state.showBufferList) R.string.chat_hide_server_list else R.string.chat_show_server_list)
                         BarIconButton(
                             size = iconBtnSize,
                             onClick = onToggleBufferList,
-                            modifier = Modifier.tourTarget(TourTarget.CHAT_DRAWER_BUTTON),
+                            modifier = Modifier.tourTarget(TourTarget.CHAT_DRAWER_BUTTON)
+                                .semantics { contentDescription = serverListAction },
                         ) { Text("☰") }
                     } else if (!state.settings.networkTabsAtBottom) {
                         // The bottom bar replaces the drawer in this mode, so drop the opener.
@@ -3124,7 +3130,21 @@ fun ChatScreen(
                                 val onClick: () -> Unit,
                             )
 
+                            val serverListAction = stringResource(
+                                if (state.showBufferList) R.string.chat_hide_server_list else R.string.chat_show_server_list)
                             val entries = buildList {
+                                if (viewModel != null && selBufName.startsWith("DCCCHAT:")) {
+                                    add(MenuEntry("Wraith controls") {
+                                        overflowExpanded = false
+                                        showWraithPanel = true
+                                    })
+                                }
+                                if (isWide) {
+                                    add(MenuEntry(serverListAction) {
+                                        overflowExpanded = false
+                                        onToggleBufferList()
+                                    })
+                                }
                                 if (isChannel) {
                                     val pinKey = selected
                                     val pinned = pinKey in state.settings.pinnedChannels
@@ -4806,6 +4826,10 @@ fun ChatScreen(
         }
     } else {
         scaffold()
+    }
+
+    if (showWraithPanel && viewModel != null && selBufName.startsWith("DCCCHAT:")) {
+        WraithPanel(viewModel, selected, selBufName.removePrefix("DCCCHAT:")) { showWraithPanel = false }
     }
 
     if (showChanOps && isChannel) {

@@ -27,17 +27,17 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class E2eKeyStore(private val secretStore: SecretStore) {
 
-    data class Entry(val scheme: E2eScheme, val key: ByteArray) {
+    data class Entry(val scheme: E2eScheme, val key: ByteArray, val fishEcb: Boolean = false) {
         // Custom equals/hashCode because of the ByteArray field. Two entries with
         // different key bytes must compare unequal even if their schemes match,
         // and the hashCode must mix the key bytes for set/map containment.
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (other !is Entry) return false
-            return scheme == other.scheme && key.contentEquals(other.key)
+            return scheme == other.scheme && fishEcb == other.fishEcb && key.contentEquals(other.key)
         }
 
-        override fun hashCode(): Int = 31 * scheme.hashCode() + key.contentHashCode()
+        override fun hashCode(): Int = 31 * (31 * scheme.hashCode() + key.contentHashCode()) + fishEcb.hashCode()
     }
 
     private val cache = ConcurrentHashMap<String, Entry>()
@@ -58,8 +58,10 @@ class E2eKeyStore(private val secretStore: SecretStore) {
 
     fun set(networkId: String, target: String, entry: Entry) {
         hydrateIfNeeded(networkId)
+        require(!entry.fishEcb || entry.scheme == E2eScheme.BLOWFISH)
+        secretStore.setE2eKey(networkId, target.lowercase(java.util.Locale.ROOT),
+            if (entry.fishEcb) "BLOWFISH_ECB" else entry.scheme.name, entry.key)
         cache[cacheKey(networkId, target)] = entry
-        secretStore.setE2eKey(networkId, target.lowercase(java.util.Locale.ROOT), entry.scheme.name, entry.key)
     }
 
     fun clear(networkId: String, target: String) {
@@ -94,8 +96,9 @@ class E2eKeyStore(private val secretStore: SecretStore) {
             // with many configured targets this is sub-millisecond and only runs
             // once per network per process lifetime.
             for (stored in secretStore.listE2eKeys(networkId)) {
-                val scheme = E2eScheme.fromName(stored.schemeName) ?: continue
-                cache[cacheKey(networkId, stored.target)] = Entry(scheme, stored.keyBytes)
+                val ecb = stored.schemeName == "BLOWFISH_ECB"
+                val scheme = if (ecb) E2eScheme.BLOWFISH else E2eScheme.fromName(stored.schemeName) ?: continue
+                cache[cacheKey(networkId, stored.target)] = Entry(scheme, stored.keyBytes, fishEcb = ecb)
             }
             hydratedNetworks = hydratedNetworks + networkId
         }

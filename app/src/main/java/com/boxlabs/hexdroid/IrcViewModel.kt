@@ -2257,8 +2257,7 @@ class IrcViewModel(
                     },
                     showBufferList = when {
                         applyDefaults -> s.defaultShowBufferList
-                        s.defaultShowBufferList != st.settings.defaultShowBufferList &&
-                            st.showBufferList == st.settings.defaultShowBufferList -> s.defaultShowBufferList
+                        s.defaultShowBufferList != st.settings.defaultShowBufferList -> s.defaultShowBufferList
                         else -> st.showBufferList
                     }
                 )
@@ -2960,8 +2959,9 @@ class IrcViewModel(
 
     fun toggleBufferList() {
         val st = _state.value
-        _state.value = st.copy(showBufferList = !st.showBufferList)
-        viewModelScope.launch { runCatching { repo.updateSettings { it.copy(defaultShowBufferList = _state.value.showBufferList) } } }
+        val visible = !st.showBufferList
+        _state.value = st.copy(showBufferList = visible)
+        viewModelScope.launch { runCatching { repo.updateSettings { it.copy(defaultShowBufferList = visible) } } }
     }
 
     fun toggleNickList() {
@@ -4925,6 +4925,77 @@ fun startAddNetwork() {
         }
     }
 
+    private data class PendingFishExchange(
+        val target: String,
+        val exchange: com.boxlabs.hexdroid.crypto.FishDh1080.Exchange,
+        val previous: com.boxlabs.hexdroid.crypto.E2eKeyStore.Entry?,
+    )
+    private val pendingFishExchanges = mutableMapOf<Pair<String, String>, PendingFishExchange>()
+
+    /** User-initiated exchange only: unsolicited notices never install or replace a key. */
+    fun startFishKeyExchange(networkId: String, target: String) {
+        val client = runtimes[networkId]?.client ?: return
+        if (!client.isConnectedNow() || target.length !in 1..64 ||
+            target.any { it.isWhitespace() || it.code < 33 || it in ":,*!@" } ||
+            isChannelOnNet(networkId, target) || isMyNick(networkId, target)) return
+        val bufferKey = resolveBufferKey(networkId, target)
+        ensureBuffer(bufferKey)
+        openBuffer(bufferKey)
+        if (getAgeUiInfo(networkId, target).enabled) {
+            append(bufferKey, from = null, text = "*** Disable +AGE for this private chat before exchanging a FiSH key.", doNotify = false)
+            return
+        }
+        val key = networkId to casefoldText(networkId, target)
+        if (key in pendingFishExchanges || pendingFishExchanges.size >= 16) {
+            append(bufferKey, from = null, text = "*** A FiSH exchange is already pending; wait for completion or timeout.", doNotify = false)
+            return
+        }
+        val pending = PendingFishExchange(target, com.boxlabs.hexdroid.crypto.FishDh1080.create(), e2eKeyStore.get(networkId, target))
+        pendingFishExchanges[key] = pending
+        append(bufferKey, from = null, text = "*** Exchanging a FiSH key with $target over IRC. DCC chat is not encrypted by this exchange.", doNotify = false)
+        viewModelScope.launch {
+            try {
+                client.sendRaw("NOTICE $target :DH1080_INIT ${pending.exchange.publicKey}")
+                delay(60_000)
+                if (pendingFishExchanges[key] === pending) {
+                    append(bufferKey, from = null, text = "*** FiSH key exchange timed out; previous key unchanged.", doNotify = false)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                append(bufferKey, from = null, text = "*** FiSH key exchange could not be sent; previous key unchanged.", doNotify = false)
+            } finally {
+                if (pendingFishExchanges[key] === pending) pendingFishExchanges.remove(key)
+                pending.exchange.destroy()
+            }
+        }
+    }
+
+    private fun receiveFishKeyExchange(netId: String, ev: IrcEvent.Notice): Boolean {
+        if (!ev.text.startsWith("DH1080_FINISH ") || ev.isHistory || ev.isServer ||
+            !ev.isPrivate || !isMyNick(netId, ev.target)) return false
+        val key = netId to casefoldText(netId, ev.from)
+        val pending = pendingFishExchanges.remove(key) ?: return false
+        val bufferKey = resolveBufferKey(netId, pending.target)
+        try {
+            // CBC negotiation is intentionally unsupported: Wraith sends legacy ECB.
+            val fields = ev.text.split(' ')
+            require(fields.size == 2) { "Unsupported FiSH exchange mode" }
+            require(e2eKeyStore.get(netId, pending.target) == pending.previous &&
+                !getAgeUiInfo(netId, pending.target).enabled) { "Encryption settings changed during exchange" }
+            val passphrase = pending.exchange.finish(fields[1])
+            when (val result = setE2eBlowfishPassphrase(netId, pending.target, passphrase, fishEcb = true)) {
+                is E2eImportResult.Success -> append(bufferKey, from = null,
+                    text = "*** FiSH enabled for private messages. Verify fingerprint with the peer: ${result.info.fingerprint}. DH1080 does not authenticate identity. DCC is unchanged.", doNotify = false)
+                is E2eImportResult.Failure -> append(bufferKey, from = null,
+                    text = "*** FiSH key could not be saved: ${result.reason}", doNotify = false)
+            }
+        } catch (_: IllegalArgumentException) {
+            append(bufferKey, from = null, text = "*** FiSH exchange rejected; previous key unchanged.", doNotify = false)
+        } finally { pending.exchange.destroy() }
+        return true
+    }
+
     fun clearE2eKeyForTarget(networkId: String, target: String) {
         e2eKeyStore.clear(networkId, target)
         bumpE2eKeyVersion()
@@ -4935,14 +5006,14 @@ fun startAddNetwork() {
      * fishlim does, so both clients derive the same key. Passphrases over 56 bytes are rejected
      * rather than truncated. Returns the key info, or a failure reason.
      */
-    fun setE2eBlowfishPassphrase(networkId: String, target: String, passphrase: String): E2eImportResult {
+    fun setE2eBlowfishPassphrase(networkId: String, target: String, passphrase: String, fishEcb: Boolean = false): E2eImportResult {
         val raw = passphrase.toByteArray(Charsets.UTF_8)
         if (raw.isEmpty()) return E2eImportResult.Failure(appContext.getString(R.string.vm_pass_empty))
         if (raw.size < 4) return E2eImportResult.Failure(appContext.getString(R.string.vm_pass_too_short))
         if (raw.size > 56) return E2eImportResult.Failure(appContext.getString(R.string.vm_pass_too_long, raw.size))
         return try {
             e2eKeyStore.set(networkId, target, com.boxlabs.hexdroid.crypto.E2eKeyStore.Entry(
-                com.boxlabs.hexdroid.crypto.E2eScheme.BLOWFISH, raw))
+                com.boxlabs.hexdroid.crypto.E2eScheme.BLOWFISH, raw, fishEcb = fishEcb))
             bumpE2eKeyVersion()
             val fp = com.boxlabs.hexdroid.crypto.E2eFingerprint.compute(com.boxlabs.hexdroid.crypto.E2eScheme.BLOWFISH, raw)
             // The "key bytes" surfaced to the dialog for Blowfish are the
@@ -7310,6 +7381,9 @@ fun startAddNetwork() {
                 }
             }
             is IrcEvent.Disconnected -> {
+                pendingFishExchanges.keys.filter { it.first == netId }.forEach {
+                    pendingFishExchanges.remove(it)?.exchange?.destroy()
+                }
                 // Only for a connection that was up: a failed connect attempt isn't a disconnect.
                 if (_state.value.connections[netId]?.connected == true) {
                     scriptEvent("DISCONNECT", netId, "*server*", text = ev.reason.orEmpty(), isMe = true)
@@ -8573,6 +8647,7 @@ if (code == "442") {
                 val st = _state.value
                 val suppressUnread = ev.isHistory && !st.settings.ircHistoryCountsAsUnread
                 if (!ev.isServer && isNickIgnored(netId, ev.from)) return
+                if (receiveFishKeyExchange(netId, ev)) return
                 if (!ev.isHistory) scriptEvent(
                     "NOTICE", netId, if (ev.isPrivate) ev.from else ev.target, ev.from, ev.text,
                     isMyNick(netId, ev.from), isPrivate = ev.isPrivate,
@@ -12411,6 +12486,13 @@ private fun moveNickAcrossChannels(netId: String, oldNick: String, newNick: Stri
         append(bufferKey, from = null, text = "*** " + appContext.getString(R.string.vm_dcc_chat_connected, peer), doNotify = false)
     }
 
+    /** Send only through the explicitly selected DCC socket, never the IRC connection. */
+    fun sendWraithCommand(bufferKey: String, command: String, argument: String = "") {
+        if (!isDccChatBufferName(bufferKey.substringAfter("::", ""))) return
+        val line = WraithCommands.line(command, argument) ?: return
+        sendDccChatLine(bufferKey, line, isAction = false)
+    }
+
     private fun sendDccChatLine(bufferKey: String, line: String, isAction: Boolean) {
         val ses = dccChatSessions[bufferKey]
         if (ses == null) {
@@ -13276,6 +13358,8 @@ private fun moveNickAcrossChannels(netId: String, oldNick: String, newNick: Stri
     }
 
     override fun onCleared() {
+        pendingFishExchanges.values.forEach { it.exchange.destroy() }
+        pendingFishExchanges.clear()
         super.onCleared()
         flushHeldOwnLines()
         val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager

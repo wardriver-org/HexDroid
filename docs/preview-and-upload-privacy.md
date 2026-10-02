@@ -6,9 +6,10 @@ Start Orbot in the same Android profile as HexDroid. Unavailable Orbot means fai
 not direct fallback. YouTube thumbnails and playback retain their direct exception.
 Server icons are suppressed while this option is enabled rather than fetched directly.
 
-With image previews enabled, HTTP/HTTPS `.onion` links preview automatically through
-Orbot even when the general Tor-preview switch is off. The Wi-Fi-only setting still
-applies. Image responses render inline; HTML responses show a bounded page title.
+With image previews enabled, HTTP/HTTPS `.onion` links show the same **Load preview**
+button as ordinary images. Tapping it loads through Orbot even when the general
+Tor-preview switch is off; no onion preview request starts before that tap.
+The Wi-Fi-only setting still applies. Image responses render inline; HTML responses show a bounded page title.
 HTML is never executed, and page scripts, styles and embedded resources are not loaded.
 Encrypted `.age` uploads cannot be previewed before decryption.
 

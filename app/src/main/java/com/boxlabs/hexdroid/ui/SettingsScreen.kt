@@ -740,6 +740,18 @@ fun SettingsScreen(
             if (onePage) item { IntroTourCard(onRunTour) }
             if (onePage || current == SettingsCategory.APPEARANCE) {
             if (onePage) item(key = "hdr_APPEARANCE") { OnePageHeader(SettingsCategory.APPEARANCE) }
+            item {
+                Column {
+                    SettingToggle(stringResource(R.string.setting_hide_tablet_server_list), !s.defaultShowBufferList) {
+                        onUpdate { copy(defaultShowBufferList = !defaultShowBufferList) }
+                    }
+                    Text(
+                        stringResource(R.string.setting_hide_tablet_server_list_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             item { SettingToggle("Always show chat controls", s.alwaysShowChatControls) {
                 onUpdate { copy(alwaysShowChatControls = !alwaysShowChatControls) }
             } }
@@ -1148,7 +1160,6 @@ fun SettingsScreen(
             item { SettingToggle(stringResource(R.string.setting_hide_away_notify), s.hideAwayNotify) { onUpdate { copy(hideAwayNotify = !hideAwayNotify) } } }
             item { SettingToggle(stringResource(R.string.setting_hide_topic_on_entry), s.hideTopicOnEntry) { onUpdate { copy(hideTopicOnEntry = !hideTopicOnEntry) } } }
             item { SectionTitle(stringResource(R.string.section_landscape)) }
-            item { SettingToggle(stringResource(R.string.setting_show_buffers_default), s.defaultShowBufferList) { onUpdate { copy(defaultShowBufferList = !defaultShowBufferList) } } }
             item { SettingToggle(stringResource(R.string.setting_show_nicklist_default), s.defaultShowNickList) { onUpdate { copy(defaultShowNickList = !defaultShowNickList) } } }
 
             item { SectionTitle(stringResource(R.string.section_portrait)) }

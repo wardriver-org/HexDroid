@@ -1787,4 +1787,8 @@
     <string name="theme_catppuccin_frappe">Catppuccin Frappé</string>
     <string name="theme_catppuccin_macchiato">Catppuccin Macchiato</string>
     <string name="theme_catppuccin_mocha">Catppuccin Mocha</string>
+    <string name="setting_hide_tablet_server_list">Hide server list in tablet mode</string>
+    <string name="setting_hide_tablet_server_list_desc">Give chats the full width on tablets, foldables and landscape screens. Use the ☰ button to show the list again.</string>
+    <string name="chat_hide_server_list">Hide server list</string>
+    <string name="chat_show_server_list">Show server list</string>
 </resources>

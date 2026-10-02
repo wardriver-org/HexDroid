@@ -607,10 +607,10 @@ fun InlinePreview(
 
     if (youtubeId == null && twitterData == null && !isImage && !onion) return
 
-    // Onion previews always use their dedicated Orbot route; Twitter/X requires a tap.
-    // Twitter images can be sensitive or high-bandwidth, and the fxtwitter API
-    // call leaks the URL to a third party — opt-in is the right default.
-    val autoLoad = youtubeId != null || onion
+    // Images, onion links and Twitter/X require the same explicit Load preview tap.
+    // Onion requests still use the dedicated Orbot route selected above.
+    // Only YouTube thumbnails retain their automatic loading exception.
+    val autoLoad = youtubeId != null
 
     var state        by rememberSaveable(url, stateSaver = previewStateSaver) {
         mutableStateOf(if (autoLoad) PreviewState.Loading else PreviewState.Idle)
