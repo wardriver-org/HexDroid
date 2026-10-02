@@ -6125,7 +6125,7 @@ fun startAddNetwork() {
                             append(currentKey, from = null, isLocal = true, doNotify = false,
                                 text = "*** " + appContext.getString(R.string.vm_agmkey_usage))
                         }
-                        val defaultTarget = if (bufferName == "*server*") null else bufferName
+                        val defaultTarget = if (isPseudoBuffer(bufferName)) null else bufferName
                         when (sub) {
                             "gen" -> {
                                 val target = parts.getOrNull(2)?.takeIf { it.isNotBlank() } ?: defaultTarget
@@ -6302,7 +6302,7 @@ fun startAddNetwork() {
                                 text = "*** " + appContext.getString(R.string.vm_react_usage, cmd))
                             return@launch
                         }
-                        if (bufferName == "*server*" || c == null) {
+                        if (isPseudoBuffer(bufferName) || c == null) {
                             append(currentKey, from = null, isLocal = true, doNotify = false,
                                 text = "*** " + appContext.getString(R.string.vm_react_needs_target, cmd))
                             return@launch
@@ -6393,7 +6393,7 @@ fun startAddNetwork() {
 
                     "flip" -> {
                         // secret table-flip easter egg
-                        if (bufferName == "*server*") return@launch
+                        if (isPseudoBuffer(bufferName)) return@launch
                         val rt = runtimes[netId] ?: return@launch
                         val myNick = _state.value.connections[netId]?.myNick ?: _state.value.myNick
                         rt.client.sendRaw("PRIVMSG $bufferName :(╯°□°)╯┬─┬")
@@ -6455,7 +6455,7 @@ fun startAddNetwork() {
                             stampReadMarker(args.firstOrNull()?.let { resolveBufferKey(netId, it) } ?: currentKey)
                             return@launch
                         }
-                        c.handleSlashCommand(cmdLine, bufferName)
+                        c.handleSlashCommand(cmdLine, if (isPseudoBuffer(bufferName)) "*server*" else bufferName)
                         return@launch
                     }
                     "motd" -> {
@@ -6479,7 +6479,7 @@ fun startAddNetwork() {
                         val arg = cmdLine.substringAfter(' ', "").trim()
                         val target = when {
                             arg.isNotBlank() -> arg.substringBefore(' ')
-                            bufferName != "*server*" -> bufferName
+                            !isPseudoBuffer(bufferName) -> bufferName
                             else -> ""
                         }
 
@@ -6508,7 +6508,7 @@ fun startAddNetwork() {
                             return@launch
                         }
 
-                        val target = if (bufferName == "*server*") return@launch else bufferName
+                        val target = if (isPseudoBuffer(bufferName)) return@launch else bufferName
                         // Route through ctcp() so privmsg()'s E2E hook gets to encrypt
                         // the ACTION body when a per-target key is configured. Direct
                         // c.sendRaw("PRIVMSG …") would bypass that hook and ship the
@@ -6546,7 +6546,7 @@ fun startAddNetwork() {
                             return@launch
                         }
 
-                        val target = if (bufferName == "*server*") return@launch else bufferName
+                        val target = if (isPseudoBuffer(bufferName)) return@launch else bufferName
                         // Route through ctcp() so privmsg()'s E2E hook can encrypt the ACTION
                         // body when a per-target key is set, exactly like /me above.
                         val actLabel = c.ctcp(target, "ACTION $msg")
@@ -6756,7 +6756,7 @@ fun startAddNetwork() {
                         }
 
                         // Default MODE handling
-                        c.handleSlashCommand(cmdLine, bufferName)
+                        c.handleSlashCommand(cmdLine, if (isPseudoBuffer(bufferName)) "*server*" else bufferName)
                         return@launch
                     }
 
@@ -6792,7 +6792,7 @@ fun startAddNetwork() {
                             return@launch
                         }
                         // Let the IRC client handle it
-                        c.handleSlashCommand(cmdLine, bufferName)
+                        c.handleSlashCommand(cmdLine, if (isPseudoBuffer(bufferName)) "*server*" else bufferName)
                         return@launch
                     }
                 }
@@ -6834,7 +6834,7 @@ fun startAddNetwork() {
                 append(currentKey, from = null, text = "*** " + appContext.getString(R.string.vm_not_connected), doNotify = false)
                 return@launch
             }
-            if (bufferName == "*server*") {
+            if (isPseudoBuffer(bufferName)) {
                 c.sendRaw(fullMessage)
                 return@launch
             }
