@@ -25,8 +25,8 @@ internal object UploadPreparation {
         val image = magicImage || declaredMime?.startsWith("image/", true) == true || bounds.outMimeType?.startsWith("image/") == true ||
             name.substringAfterLast('.', "").lowercase() in setOf("jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "avif", "bmp", "tif", "tiff", "svg", "raw", "dng", "cr2", "nef", "arw")
         if (!image) return Prepared(source, name, declaredMime ?: "application/octet-stream")
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || bounds.outWidth.toLong() * bounds.outHeight > 32_000_000L) {
-            throw IOException("Image cannot be safely sanitized (unsupported format or over 32 megapixels)")
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || bounds.outWidth.toLong() * bounds.outHeight > 16_000_000L) {
+            throw IOException("Image cannot be safely sanitized (unsupported format or over 16 megapixels)")
         }
         val orientation = runCatching { ExifInterface(source).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }
             .getOrElse { throw IOException("Cannot read image metadata; upload stopped", it) }
@@ -47,7 +47,19 @@ internal object UploadPreparation {
         try {
             val cleanBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, transform, true)
             rotated = cleanBitmap
-            output.outputStream().use { if (!cleanBitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) throw IOException("Image sanitization failed") }
+            output.outputStream().use { raw ->
+                val bounded = object : java.io.FilterOutputStream(raw) {
+                    var count = 0L
+                    override fun write(b: ByteArray, off: Int, len: Int) {
+                        count += len
+                        if (count > UploadLimits.MAX_BYTES || cacheDir.usableSpace < len + UploadLimits.RESERVE_BYTES)
+                            throw IOException("Not enough space or sanitized image exceeds upload limit")
+                        out.write(b, off, len)
+                    }
+                    override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+                }
+                if (!cleanBitmap.compress(Bitmap.CompressFormat.PNG, 100, bounded)) throw IOException("Image sanitization failed")
+            }
             return Prepared(output, name.substringBeforeLast('.', name) + ".png", "image/png")
         } catch (e: Exception) { output.delete(); throw e }
         finally { if (rotated !== bitmap) rotated?.recycle(); bitmap.recycle() }

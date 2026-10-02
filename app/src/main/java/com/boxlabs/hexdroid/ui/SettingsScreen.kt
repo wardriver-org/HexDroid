@@ -969,6 +969,14 @@ fun SettingsScreen(
             if (s.imagePreviewsEnabled) {
                 item {
                     Column(Modifier.fillMaxWidth()) {
+                        SettingToggle("Load previews through Tor (Orbot)", s.previewsUseOrbot) {
+                            onUpdate { copy(previewsUseOrbot = !previewsUseOrbot) }
+                        }
+                        Text("Uses Orbot at 127.0.0.1:9050 independently of the server proxy. Start Orbot in this Android profile. No direct fallback; YouTube still loads directly. Onion links always preview automatically through Orbot when previews are enabled.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                item {
+                    Column(Modifier.fillMaxWidth()) {
                         SettingToggle(stringResource(R.string.setting_previews_wifi_only), s.imagePreviewsWifiOnly) {
                             onUpdate { copy(imagePreviewsWifiOnly = !imagePreviewsWifiOnly) }
                         }

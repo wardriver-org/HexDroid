@@ -487,17 +487,22 @@ the user ran.
 | `$mediamime` | MIME type |
 | `$mediasize` | size in bytes, or `-1` when the provider doesn't say |
 
-`media.upload` sends that file to the URL without the bytes ever passing through the
-script. The request body is staged in the cache first so it carries an exact
-`Content-Length`: a chunked upload is invisible to servers that parse multipart from
-the content length (PHP's parser is one), which answer as though no file arrived. It POSTs `multipart/form-data` under field name `file`
-by default (`-f <field>` to rename it, `-r` to send the bytes as the raw body instead,
-`-p <name=value>` to add a text form field beside the file, repeatable, which is how an
-endpoint's own options are passed),
-and answers with the same fields an `http.post` does, `$httplocation` and `$httperror`
-included. Files over 64 MB are refused with `$httperror` saying so.
-Redirects are not followed, so a 3xx is reported rather than resending the file to a
-host the permission check never saw.
+`media.upload` uses **Settings → Media → File uploader** for every attachment.
+Uploads must be enabled. The selected provider, separate Orbot upload switch,
+metadata stripping and age encryption apply equally to scripts and the chat composer.
+The token retains the network that requested the pick, even if the user switches chats.
+
+The URL and `-h`, `-p`, `-f`, `-r` arguments remain accepted for script syntax
+compatibility but cannot override the selected uploader or its privacy policy. Configure
+custom endpoints, authorization and response formats in uploader settings instead.
+On success, `$httpbody` and `$httplocation` both contain the validated uploaded URL;
+`$httpstatus` is 200. On failure, `$httpok` is false and `$httperror` describes the problem.
+Scripts parsing a provider-specific JSON response must switch to these normalized fields.
+
+Files are staged privately to determine Content-Length and limited to 64 MiB.
+Images up to 16 megapixels are re-encoded without metadata; unsupported images are
+rejected. Redirects are not followed. Script HTTP (`http.get`/`http.post`) remains a
+separate HTTPS-only facility and refuses cross-origin redirects.
 
 ```
 alias img { media.pick -m image/* img_picked $buffer }

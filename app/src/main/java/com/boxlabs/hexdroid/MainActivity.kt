@@ -30,7 +30,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import com.boxlabs.hexdroid.ui.AppRoot
 import com.boxlabs.hexdroid.ui.FloatingWindow
 
-class MainActivity : ComponentActivity() {
+open class MainActivity : ComponentActivity() {
 
     private lateinit var vm: IrcViewModel
 
@@ -138,6 +138,20 @@ class MainActivity : ComponentActivity() {
     
     private fun processIntent(intent: android.content.Intent?) {
         if (intent == null) return
+        // Public launcher/deep links never authorize internal notification operations.
+        if (this !is NotificationActivity) {
+            if (intent.action == android.content.Intent.ACTION_SEND || intent.action == android.content.Intent.ACTION_VIEW) {
+                val external = android.content.Intent(intent).apply {
+                    removeExtra(NotificationHelper.EXTRA_ACTION)
+                    removeExtra(NotificationHelper.EXTRA_NETWORK_ID)
+                    removeExtra(NotificationHelper.EXTRA_BUFFER)
+                    removeExtra(NotificationHelper.EXTRA_MSG_ID)
+                    removeExtra(NotificationHelper.EXTRA_MSG_ANCHOR)
+                }
+                vm.handleIntent(external)
+            }
+            return
+        }
         val action = intent.getStringExtra(NotificationHelper.EXTRA_ACTION)
         when (action) {
             NotificationHelper.ACTION_QUIT -> vm.disconnectAll()

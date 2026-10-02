@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
 
-    <!-- Default: block cleartext traffic for all connections. -->
-    <base-config cleartextTrafficPermitted="false">
+    <!-- Dynamic self-hosted endpoints cannot be enumerated here. Application transports
+         enforce HTTPS, except an explicitly enabled uploader endpoint and Tor onion previews. -->
+    <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

@@ -127,6 +127,11 @@
                     </intent-filter>
                 </receiver>
 
+                <activity android:name=".NotificationActivity"
+                    android:exported="false" android:launchMode="singleTask"
+                    android:resizeableActivity="true"
+                    android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden"
+                    android:windowSoftInputMode="adjustResize" />
                 <activity
                     android:name=".MainActivity"
                     android:exported="true"

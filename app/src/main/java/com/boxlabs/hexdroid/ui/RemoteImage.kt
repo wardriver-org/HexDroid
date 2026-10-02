@@ -40,7 +40,8 @@ internal object RemoteImage {
     }
 
     /** Fetches in progress, so several rows asking for one URL make one request. */
-    private val inFlight = HashMap<String, Deferred<ImageBitmap?>>()
+    private data class Flight(val request: Deferred<ImageBitmap?>, var users: Int = 0)
+    private val inFlight = HashMap<String, Flight>()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -73,23 +74,37 @@ internal object RemoteImage {
     suspend fun fetch(url: String, transport: RemoteContentTransport? = null): ImageBitmap? {
         val key = key(url, transport)
         cached(url, transport)?.let { return it }
-        val request = synchronized(inFlight) {
-            inFlight[key] ?: scope.async { download(url, transport, key) }.also { job ->
-                inFlight[key] = job
-                job.invokeOnCompletion { synchronized(inFlight) { inFlight.remove(key) } }
+        val flight = synchronized(inFlight) {
+            val entry = inFlight[key] ?: run {
+                if (inFlight.size >= 64) return null
+                Flight(scope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) { download(url, transport, key) })
+                    .also { inFlight[key] = it }
+            }
+            entry.users++
+            entry
+        }
+        try {
+            flight.request.start()
+            return flight.request.await()
+        } finally {
+            synchronized(inFlight) {
+                if (--flight.users == 0) {
+                    if (inFlight[key] === flight) inFlight.remove(key)
+                    flight.request.cancel()
+                }
             }
         }
-        return request.await()
     }
 
     private val directClient = com.boxlabs.hexdroid.RemoteContentHttp.client(
-        com.boxlabs.hexdroid.connection.ProxyConfig())
+        com.boxlabs.hexdroid.connection.ProxyConfig(), preview = true)
 
     private suspend fun download(url: String, transport: RemoteContentTransport?, key: String): ImageBitmap? = try {
-        if (!url.startsWith("https://", ignoreCase = true)) null else {
+        if (!url.startsWith("https://", ignoreCase = true) &&
+            !(com.boxlabs.hexdroid.HttpPolicy.isOnion(url) && transport != null)) null else {
             val client = (transport?.client() ?: directClient).newBuilder()
                 .followRedirects(false).build()
-            client.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { response ->
+            PreviewRequests.fetch(client, okhttp3.Request.Builder().url(url).build()) { response ->
                 if (!response.isSuccessful || response.body.contentLength() > MAX_BYTES) null else {
                     val buf = ByteArrayOutputStream()
                     response.body.byteStream().use readImage@ { input ->
@@ -115,7 +130,7 @@ internal object RemoteImage {
     private fun decodeSampled(bytes: ByteArray): android.graphics.Bitmap? {
         val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
         android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || bounds.outWidth.toLong() * bounds.outHeight > 16_000_000L) return null
 
         val opts = android.graphics.BitmapFactory.Options().apply {
             inSampleSize = sampleSizeFor(maxOf(bounds.outWidth, bounds.outHeight))

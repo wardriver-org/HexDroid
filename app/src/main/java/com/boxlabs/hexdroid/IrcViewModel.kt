@@ -423,6 +423,7 @@ data class UiSettings(
     val uploadAgeEnabled: Boolean = false,
     val uploadAgeRecipients: String = "",
     val imagePreviewsEnabled: Boolean = false,
+    val previewsUseOrbot: Boolean = false,
     /** When true, only load previews on Wi-Fi to save mobile data. */
     val imagePreviewsWifiOnly: Boolean = true,
     /** User-defined command aliases */
@@ -1473,7 +1474,9 @@ class IrcViewModel(
     suspend fun remoteContentProxy(netId: String): com.boxlabs.hexdroid.connection.ProxyConfig =
         withContext(Dispatchers.IO) {
             check(_state.value.networks.any { it.id == netId }) { "Unknown network" }
-            proxyForNetwork(netId)
+            if (_state.value.settings.previewsUseOrbot)
+                com.boxlabs.hexdroid.connection.ProxyConfig(com.boxlabs.hexdroid.connection.ProxyType.SOCKS5, "127.0.0.1", 9050)
+            else proxyForNetwork(netId)
         }
 
     private fun proxyForNetwork(netId: String): com.boxlabs.hexdroid.connection.ProxyConfig {
@@ -4209,9 +4212,10 @@ fun startAddNetwork() {
 
     /** The script whose pick prompt is showing. */
     private var scriptPickOwner: String? = null
+    private var scriptPickNetwork: String? = null
 
     /** A file handed to [owner], addressed by an opaque token. */
-    private data class ScriptMediaGrant(val uri: android.net.Uri, val owner: String)
+    private data class ScriptMediaGrant(val uri: android.net.Uri, val owner: String, val networkId: String)
 
     /**
      * Files the user handed to scripts this session, keyed by an opaque token. Scripts get the
@@ -4250,6 +4254,7 @@ fun startAddNetwork() {
             }
             scriptPickCallback = onResult
             scriptPickOwner = owner
+            scriptPickNetwork = network ?: _state.value.activeNetworkId
             _scriptFilePick.value = ScriptFilePick(
                 id = java.util.UUID.randomUUID().toString(),
                 mimeFilter = mimeFilter.ifBlank { "*/*" },
@@ -4275,11 +4280,13 @@ fun startAddNetwork() {
     fun scriptFilePickResult(uri: android.net.Uri?) {
         val cb = scriptPickCallback
         val owner = scriptPickOwner
+        val networkId = scriptPickNetwork
+        scriptPickNetwork = null
         scriptPickCallback = null
         scriptPickOwner = null
         _scriptFilePick.value = null
         if (cb == null || owner == null) return
-        if (uri == null) {
+        if (uri == null || networkId == null) {
             scriptPickQuietUntil[owner] = System.currentTimeMillis() + SCRIPT_PICK_QUIET_MS
             cb(null)
             return
@@ -4297,10 +4304,19 @@ fun startAddNetwork() {
                 } ?: -1L
             }.getOrDefault(-1L)
             val token = java.util.UUID.randomUUID().toString()
-            scriptMediaTokens[token] = ScriptMediaGrant(uri, owner)
+            scriptMediaTokens[token] = ScriptMediaGrant(uri, owner, networkId)
             withContext(Dispatchers.Main) {
                 cb(com.boxlabs.hexdroid.script.ScriptMediaRef(token, name, mime, size))
             }
+        }
+    }
+
+    /** Script uploads cannot override the user's host, metadata, encryption or routing policy. */
+    fun uploadScriptAttachment(token: String, owner: String, done: (String?, String?) -> Unit) {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            val grant = scriptMediaTokens[token]?.takeIf { it.owner == owner }
+            if (grant == null) done(null, "Unknown file token")
+            else uploadFileToFilehost(grant.networkId, grant.uri, done)
         }
     }
 
@@ -4761,7 +4777,7 @@ fun startAddNetwork() {
     private fun scriptNetworkAllowed(url: String, resolve: Boolean): Boolean {
         val u = runCatching { java.net.URI(url.trim()) }.getOrNull() ?: return false
         val scheme = u.scheme?.lowercase()
-        if (scheme != "http" && scheme != "https") return false           // no file:/content:/ftp:/…
+        if (scheme != "https") return false           // no file:/content:/ftp:/…
         val host = u.host?.lowercase()?.trim('[', ']')?.takeIf { it.isNotEmpty() } ?: return false
         // Deny while a proxied network is live. Checked against networks that actually have a runtime,
         // so an unused proxied profile doesn't disable scripting everywhere. The engine gives us only
@@ -4770,6 +4786,7 @@ fun startAddNetwork() {
             n.proxyType != com.boxlabs.hexdroid.connection.ProxyType.NONE && runtimes.containsKey(n.id)
         }
         if (proxiedLive) return false
+        if (host.trimEnd('.').endsWith(".onion")) return false // script HTTP has no Tor transport
         if (isLocalOrPrivateHost(host)) return false                       // no device-local or LAN targets
         // Resolve LAST: every check above is decidable from the text, and resolving first would put
         // a plaintext lookup on the wire for a request we refuse anyway - including while proxied.
@@ -12885,12 +12902,12 @@ private fun moveNickAcrossChannels(netId: String, oldNick: String, newNick: Stri
             onDone(null, "Uploads are disabled. Enable them in Settings → Media → File uploader.")
             return
         }
-        val cfg = runtimes[netId]?.client?.config
-        if (cfg == null) {
+        val profile = _state.value.networks.firstOrNull { it.id == netId }
+        if (profile == null) {
             onDone(null, appContext.getString(R.string.vm_upload_unsupported))
             return
         }
-        if (!cfg.capPrefs.filehostUploads) {
+        if (!profile.caps.filehostUploads) {
             onDone(null, appContext.getString(R.string.vm_upload_disabled))
             return
         }
@@ -12900,16 +12917,21 @@ private fun moveNickAcrossChannels(netId: String, oldNick: String, newNick: Stri
                     ?: runCatching { java.net.URLDecoder.decode(uri.lastPathSegment ?: "", "UTF-8") }.getOrNull()
                 val mime = runCatching { appContext.contentResolver.getType(uri) }.getOrNull()
 
+                val uploadContext = kotlin.coroutines.coroutineContext
+                check(_state.value.networks.any { it.id == netId }) { "Network was removed" }
+                val uploadProxy = proxyForNetwork(netId)
                 fun send(): FilehostUpload.Result {
                     val stream = appContext.contentResolver.openInputStream(uri)
                         ?: return FilehostUpload.Result(null, appContext.getString(R.string.vm_file_open_failed))
                     return stream.use { inp ->
                         MultipartUploader.upload(settings.uploadConfig(repo.secretStore.getUploaderToken(settings.uploadConfig().endpoint)),
-                            fileName = name, mimeType = mime, input = inp, cacheDir = appContext.cacheDir, proxy = cfg.proxy)
+                            fileName = name, mimeType = mime, input = inp, cacheDir = appContext.cacheDir, proxy = uploadProxy, checkCancelled = { if (uploadContext[kotlinx.coroutines.Job]?.isActive == false) throw kotlinx.coroutines.CancellationException() })
                     }
                 }
 
                 send()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (t: Throwable) {
                 FilehostUpload.Result(null, appContext.getString(R.string.vm_upload_failed, t.message ?: t.javaClass.simpleName))
             }

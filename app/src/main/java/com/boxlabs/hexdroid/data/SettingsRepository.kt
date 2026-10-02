@@ -406,6 +406,7 @@ class SettingsRepository(private val ctx: Context) {
                 uploadAgeEnabled = o.optBoolean("uploadAgeEnabled", false),
                 uploadAgeRecipients = o.optString("uploadAgeRecipients", ""),
                 imagePreviewsEnabled = o.optBoolean("imagePreviewsEnabled", false),
+                previewsUseOrbot = o.optBoolean("previewsUseOrbot", false),
                 imagePreviewsWifiOnly = o.optBoolean("imagePreviewsWifiOnly", true),
                 commandAliases = o.optJSONObject("commandAliases")?.let { ao ->
                     buildMap {
@@ -526,6 +527,7 @@ class SettingsRepository(private val ctx: Context) {
         o.put("uploadAgeEnabled", s.uploadAgeEnabled)
         o.put("uploadAgeRecipients", s.uploadAgeRecipients)
         o.put("imagePreviewsEnabled", s.imagePreviewsEnabled)
+        o.put("previewsUseOrbot", s.previewsUseOrbot)
         o.put("imagePreviewsWifiOnly", s.imagePreviewsWifiOnly)
         o.put("commandAliases", JSONObject().apply {
             s.commandAliases.forEach { (k, v) -> put(k, v) }

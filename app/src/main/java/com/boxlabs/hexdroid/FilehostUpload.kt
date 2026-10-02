@@ -120,10 +120,10 @@ internal object FilehostUpload {
         }
         when (base.protocol.lowercase()) {
             "https" -> Unit
-            "http" -> if (connectionUsesTls) {
+            "http" -> {
                 return Result(
                     null,
-                    "Refusing upload: server advertises a plaintext http:// filehost while this connection uses TLS"
+                    "Legacy filehost uploads require HTTPS; use the configured uploader for an explicitly enabled HTTP endpoint"
                 )
             }
             else -> return Result(null, "Unsupported filehost URL scheme: ${base.protocol}")

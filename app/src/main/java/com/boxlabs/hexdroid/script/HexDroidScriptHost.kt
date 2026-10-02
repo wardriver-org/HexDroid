@@ -141,6 +141,10 @@ class HexDroidScriptHost(
                                 onResult(ScriptHttpResponse(ok = false, status = status, body = "", error = "bad redirect"))
                                 return@execute
                             }
+                        if (!com.boxlabs.hexdroid.HttpPolicy.sameOrigin(url, next)) {
+                            onResult(ScriptHttpResponse(false, status, "", "Cross-origin redirect refused"))
+                            return@execute
+                        }
                         // 303, and 301/302 answering a POST, become GET. 307/308 keep method + body.
                         if (status == 303 || (method == "POST" && (status == 301 || status == 302))) {
                             method = "GET"
@@ -232,106 +236,9 @@ class HexDroidScriptHost(
      * here because the token may have been issued long before this call.
      */
     override fun mediaUpload(req: ScriptUploadRequest, onResult: (ScriptHttpResponse) -> Unit) {
-        httpWorker.execute {
-            if (!vm.scriptNetworkAllowedResolved(req.url)) {
-                onResult(ScriptHttpResponse(ok = false, status = 0, body = "", error = "blocked by policy"))
-                return@execute
-            }
-            val source = vm.scriptMediaSource(req.token, req.owner)
-            if (source == null) {
-                onResult(ScriptHttpResponse(ok = false, status = 0, body = "", error = "unknown file token"))
-                return@execute
-            }
-            val (uri, name, mime) = source
-            val input = vm.scriptOpenMedia(uri)
-            if (input == null) {
-                onResult(ScriptHttpResponse(ok = false, status = 0, body = "", error = "cannot open file"))
-                return@execute
-            }
-            var conn: HttpURLConnection? = null
-            var staged: java.io.File? = null
-            try {
-                val boundary = "hexdroid" + java.util.UUID.randomUUID().toString().replace("-", "")
-
-                // The request body is assembled on disk first so its exact length is known.
-                // Chunked encoding is what a streaming upload would need, and a server that
-                // parses multipart from CONTENT_LENGTH (PHP's does) sees no parts at all in a
-                // chunked request and reports an empty upload. The provider's reported size is
-                // not usable for the length either, since it can disagree with what the stream
-                // yields; measuring the staged copy cannot.
-                val file = try {
-                    java.io.File.createTempFile("body", null, vm.scriptUploadCacheDir())
-                } catch (t: Throwable) {
-                    input.close()
-                    throw t
-                }
-                staged = file
-                input.use { raw ->
-                    val inp = CappedInputStream(raw, MAX_UPLOAD_BYTES)
-                    java.io.FileOutputStream(file).buffered().use { out ->
-                        if (req.field != null) {
-                            val safeName = com.boxlabs.hexdroid.FilehostUpload.sanitizeFileName(name)
-                            // Text fields first: an endpoint reading an option out of $_POST
-                            // needs it in the same body as the file.
-                            for ((k, v) in req.formFields) {
-                                out.write(
-                                    ("--$boundary\r\n" +
-                                        "Content-Disposition: form-data; name=\"${headerToken(k)}\"\r\n\r\n" +
-                                        v + "\r\n").toByteArray(Charsets.UTF_8)
-                                )
-                            }
-                            out.write(
-                                ("--$boundary\r\n" +
-                                    "Content-Disposition: form-data; name=\"${headerToken(req.field)}\"; " +
-                                    "filename=\"$safeName\"\r\n" +
-                                    "Content-Type: ${headerToken(mime)}\r\n\r\n").toByteArray(Charsets.UTF_8)
-                            )
-                            inp.copyTo(out)
-                            out.write("\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8))
-                        } else {
-                            inp.copyTo(out)
-                        }
-                    }
-                }
-
-                val bodyLength = file.length()
-                conn = (URL(req.url).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    doOutput = true
-                    connectTimeout = 15_000
-                    readTimeout = 60_000
-                    // Redirects are not followed for an upload: a 3xx to another host would
-                    // send the file somewhere the policy check never saw.
-                    instanceFollowRedirects = false
-                    setFixedLengthStreamingMode(bodyLength)
-                    req.headers.forEach { (k, v) -> setRequestProperty(k, v) }
-                    setRequestProperty(
-                        "Content-Type",
-                        if (req.field != null) "multipart/form-data; boundary=$boundary" else mime,
-                    )
-                }
-                conn.outputStream.use { out ->
-                    java.io.FileInputStream(file).buffered().use { it.copyTo(out) }
-                }
-                val status = conn.responseCode
-                val stream = if (status in 200..299) conn.inputStream else conn.errorStream
-                val text = readBody(stream)
-                onResult(
-                    ScriptHttpResponse(
-                        ok = status in 200..299,
-                        status = status,
-                        body = text,
-                        location = conn.getHeaderField("Location"),
-                    )
-                )
-            } catch (_: CappedInputStream.LimitExceeded) {
-                onResult(ScriptHttpResponse(ok = false, status = 0, body = "", error = "file too large (limit ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB)"))
-            } catch (t: Throwable) {
-                onResult(ScriptHttpResponse(ok = false, status = 0, body = "", error = t.message ?: "upload failed"))
-            } finally {
-                staged?.delete()
-                conn?.disconnect()
-            }
+        vm.uploadScriptAttachment(req.token, req.owner) { url, error ->
+            onResult(ScriptHttpResponse(ok = url != null, status = if (url != null) 200 else 0,
+                body = url.orEmpty(), location = url, error = error))
         }
     }
 

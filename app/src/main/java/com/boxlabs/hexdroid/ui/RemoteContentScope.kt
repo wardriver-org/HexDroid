@@ -13,14 +13,21 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+private object CacheCleanup {
+    val worker = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "remote-cache-cleanup").apply { isDaemon = true }
+    }
+}
+
 internal class RemoteContentTransport(
     val networkId: String,
     val proxied: Boolean,
     private val cacheRoot: File,
+    private val allowOnionHttp: Boolean = false,
     private val loadProxy: suspend () -> ProxyConfig,
 ) {
     val cacheScope = java.util.UUID.randomUUID().toString()
-    private var closed = false
+    @Volatile private var closed = false
     private var config: ProxyConfig? = null
     private var http: OkHttpClient? = null
     private var diskCache: Cache? = null
@@ -43,17 +50,22 @@ internal class RemoteContentTransport(
                 // A route/credential change must not reuse another route's HTTP responses.
                 cacheDir.deleteRecursively()
                 diskCache = Cache(cacheDir, 8L * 1024 * 1024)
-                http = RemoteContentHttp.client(current).newBuilder().cache(diskCache).build()
+                http = RemoteContentHttp.client(current, allowOnionHttp = allowOnionHttp, preview = true).newBuilder().cache(diskCache).build()
                 config = current
             }
             http!!
         }
     }
-    fun close() = synchronized(this) {
-        closed = true
-        closeClient()
-        cacheDir.deleteRecursively()
+    fun close() {
+        closed = true // fail new clients immediately without waiting on disk IO's monitor
+        CacheCleanup.worker.execute {
+            synchronized(this) {
+                closeClient()
+                cacheDir.deleteRecursively()
+            }
+        }
     }
+
 }
 
 /** Root-owned, bounded reuse across server and settings screens; never shares routes. */
@@ -63,24 +75,29 @@ internal class RemoteContentPool(cacheDir: File) {
         private val cleanedParents = mutableSetOf<String>()
         @Synchronized private fun processRoot(cacheDir: File): File {
             if (cleanedParents.add(cacheDir.absolutePath)) {
-                cacheDir.listFiles()?.filter { it.name.startsWith("remote-content-") }
-                    ?.forEach { it.deleteRecursively() }
+                CacheCleanup.worker.execute {
+                    cacheDir.listFiles()?.filter { it.name.startsWith("remote-content-") && it.name != "remote-content-$processId" }
+                        ?.forEach { it.deleteRecursively() }
+                }
             }
             return File(cacheDir, "remote-content-$processId")
         }
     }
     private val root = File(processRoot(cacheDir), java.util.UUID.randomUUID().toString())
-    private data class Key(val networkId: String, val proxied: Boolean, val routeVersion: Any?)
+    private data class Key(val networkId: String, val proxied: Boolean, val routeVersion: Any?, val forceOrbot: Boolean)
     private val entries = LinkedHashMap<Key, RemoteContentTransport>(8, 0.75f, true)
 
     @Synchronized
-    fun get(vm: IrcViewModel, networkId: String, proxied: Boolean, routeVersion: Any?): RemoteContentTransport {
-        val key = Key(networkId, proxied, routeVersion)
+    fun get(vm: IrcViewModel, networkId: String, proxied: Boolean, routeVersion: Any?, forceOrbot: Boolean = false): RemoteContentTransport {
+        val key = Key(networkId, proxied, routeVersion, forceOrbot)
         entries[key]?.let { return it }
         // Retire old configurations of this network immediately.
-        val stale = entries.keys.filter { it.networkId == networkId }
+        val stale = entries.keys.filter { it.networkId == networkId && it.forceOrbot == forceOrbot }
         stale.forEach { entries.remove(it)?.close() }
-        val result = RemoteContentTransport(networkId, proxied, root) { vm.remoteContentProxy(networkId) }
+        val result = RemoteContentTransport(networkId, proxied, root, allowOnionHttp = forceOrbot) {
+            if (forceOrbot) ProxyConfig(com.boxlabs.hexdroid.connection.ProxyType.SOCKS5, "127.0.0.1", 9050)
+            else vm.remoteContentProxy(networkId)
+        }
         entries[key] = result
         while (entries.size > 8) entries.remove(entries.keys.first())?.close()
         return result
@@ -90,9 +107,11 @@ internal class RemoteContentPool(cacheDir: File) {
     fun close() {
         entries.values.forEach { it.close() }
         entries.clear()
-        root.deleteRecursively()
+        CacheCleanup.worker.execute { root.deleteRecursively() }
     }
 }
+
+internal val LocalOrbotRemoteContent = staticCompositionLocalOf<RemoteContentTransport?> { null }
 
 internal val LocalRemoteContent = staticCompositionLocalOf<RemoteContentTransport?> { null }
 
@@ -101,5 +120,8 @@ internal fun RemoteContentScope(pool: RemoteContentPool, vm: IrcViewModel, netwo
     val transport = remember(pool, vm, networkId, proxied, routeVersion) {
         pool.get(vm, networkId, proxied, routeVersion)
     }
-    CompositionLocalProvider(LocalRemoteContent provides transport, content = content)
+    val onionTransport = remember(pool, vm, networkId) {
+        pool.get(vm, networkId, true, "onion", forceOrbot = true)
+    }
+    CompositionLocalProvider(LocalRemoteContent provides transport, LocalOrbotRemoteContent provides onionTransport, content = content)
 }

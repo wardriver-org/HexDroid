@@ -738,7 +738,7 @@ fun NetworksScreen(
                             ?.takeIf {
                                 it.startsWith("https://") &&
                                     state.settings.imagePreviewsEnabled &&
-                                    n.proxyType == com.boxlabs.hexdroid.connection.ProxyType.NONE
+                                    !state.settings.previewsUseOrbot && n.proxyType == com.boxlabs.hexdroid.connection.ProxyType.NONE
                             }
 
                         Box(

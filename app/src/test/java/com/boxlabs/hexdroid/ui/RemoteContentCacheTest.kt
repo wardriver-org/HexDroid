@@ -38,9 +38,12 @@ class RemoteContentCacheTest {
                 }
             }
             val request = Request.Builder().url(url).build()
-            client.newCall(request).execute().use { assertEquals("ok", it.body.string()) }
+            val localClient = client.newBuilder().apply {
+                interceptors().clear(); networkInterceptors().clear(); dns(okhttp3.Dns.SYSTEM)
+            }.build() // loopback-only fixture; production transport is HTTPS-only
+            localClient.newCall(request).execute().use { assertEquals("ok", it.body.string()) }
             response.get(5, TimeUnit.SECONDS) // origin is closed; repeat must come from cache
-            client.newCall(request).execute().use {
+            localClient.newCall(request).execute().use {
                 assertEquals("ok", it.body.string())
                 assertNotNull(it.cacheResponse)
                 assertNull(it.networkResponse)

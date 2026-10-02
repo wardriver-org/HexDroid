@@ -16,16 +16,38 @@ import javax.net.SocketFactory
 
 /** Per-network HTTP transport. Destination DNS and SOCKS authentication stay in the tunnel. */
 internal object RemoteContentHttp {
-    fun client(proxy: ProxyConfig): OkHttpClient {
+    fun client(proxy: ProxyConfig, allowHttpEndpoint: String? = null, allowOnionHttp: Boolean = false, preview: Boolean = false): OkHttpClient {
         if (proxy.type != ProxyType.NONE && !proxy.enabled) {
             throw IOException("Invalid SOCKS configuration; refusing direct remote content requests")
         }
+        val policy = okhttp3.Interceptor { chain ->
+            val url = chain.request().url.toString()
+            if (preview && !PreviewPolicy.allowedUrl(url)) throw IOException("Preview destination blocked")
+            if (HttpPolicy.isOnion(url) && !proxy.enabled) throw IOException("Onion content requires a SOCKS route")
+            val allowed = chain.request().url.isHttps ||
+                (allowHttpEndpoint != null && HttpPolicy.sameOrigin(allowHttpEndpoint, url)) ||
+                (allowOnionHttp && proxy.type == ProxyType.SOCKS5 && proxy.host == "127.0.0.1" &&
+                    proxy.port == 9050 && HttpPolicy.isOnion(url))
+            if (!allowed) throw IOException("Cleartext HTTP is not enabled for this request")
+            chain.proceed(chain.request())
+        }
         val builder = OkHttpClient.Builder()
+            .addInterceptor(policy)
+            .addNetworkInterceptor(policy)
             .proxy(Proxy.NO_PROXY) // Never consult a system proxy selector or fall back to another route.
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
             .callTimeout(45, TimeUnit.SECONDS)
             .followSslRedirects(false)
+        if (preview) {
+            builder.followRedirects(false)
+            if (proxy.type == ProxyType.NONE) builder.dns(Dns { host ->
+                Dns.SYSTEM.lookup(host).also { addresses ->
+                    if (addresses.isEmpty() || addresses.any { !PreviewPolicy.publicAddress(it) })
+                        throw java.net.UnknownHostException("Private preview address blocked")
+                }
+            })
+        }
         if (proxy.type != ProxyType.NONE) {
             // OkHttp needs an address for route selection. Retain the original hostname
             // on a sentinel address; the socket ignores its bytes and asks SOCKS to resolve it.

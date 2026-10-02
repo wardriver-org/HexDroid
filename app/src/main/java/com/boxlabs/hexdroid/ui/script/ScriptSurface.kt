@@ -330,16 +330,12 @@ private fun Render(v: ScriptView, onAction: (String, List<String>) -> Unit, modi
  */
 @Composable
 private fun RemoteImage(url: String, modifier: Modifier, scale: String? = null) {
-    var bitmap by remember(url) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(url) {
-        bitmap = withContext(Dispatchers.IO) {
-            runCatching {
-                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                conn.connectTimeout = 8000
-                conn.readTimeout = 8000
-                conn.inputStream.use { android.graphics.BitmapFactory.decodeStream(it) }?.asImageBitmap()
-            }.getOrNull()
-        }
+    val transport = if (com.boxlabs.hexdroid.HttpPolicy.isOnion(url))
+        com.boxlabs.hexdroid.ui.LocalOrbotRemoteContent.current else com.boxlabs.hexdroid.ui.LocalRemoteContent.current
+    var bitmap by remember(url, transport) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(url, transport) {
+        // A script surface without network context must not fall back to direct egress.
+        if (transport != null) bitmap = com.boxlabs.hexdroid.ui.RemoteImage.fetch(url, transport)
     }
     val b = bitmap
     if (b != null) {

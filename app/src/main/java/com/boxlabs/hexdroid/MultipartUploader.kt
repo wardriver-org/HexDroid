@@ -14,7 +14,7 @@ import java.util.UUID
 /** Configurable multipart uploader. No IRC credentials are accepted or sent. */
 internal object MultipartUploader {
 
-    fun upload(config: UploaderConfig, fileName: String?, mimeType: String?, input: InputStream, cacheDir: File, proxy: ProxyConfig): FilehostUpload.Result {
+    fun upload(config: UploaderConfig, fileName: String?, mimeType: String?, input: InputStream, cacheDir: File, proxy: ProxyConfig, checkCancelled: () -> Unit = {}): FilehostUpload.Result {
         config.validate()?.let { return FilehostUpload.Result(null, it) }
         var mime = mimeType?.takeIf { it.matches(Regex("[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+")) }
             ?: "application/octet-stream"
@@ -25,13 +25,20 @@ internal object MultipartUploader {
             // so cloud providers with unknown/stale sizes still get an exact Content-Length.
             val original = File.createTempFile("upload-", ".upload", cacheDir)
             staged.add(original)
-            original.outputStream().use { input.copyTo(it, 64 * 1024) }
+            original.outputStream().use { out ->
+                UploadLimits.copy(input, out, { cacheDir.usableSpace }, checkCancelled)
+            }
+            checkCancelled()
             val clean = UploadPreparation.sanitize(original, uploadName, mimeType, cacheDir)
             if (clean.file != original) staged.add(clean.file)
             var file = clean.file
             uploadName = clean.name
             mime = clean.mime
+            if (file.length() > UploadLimits.MAX_BYTES) throw java.io.IOException("Prepared file exceeds 64 MiB upload limit")
+            checkCancelled()
             if (config.ageEnabled) {
+                if (cacheDir.usableSpace < file.length() + UploadLimits.RESERVE_BYTES)
+                    throw java.io.IOException("Not enough space to encrypt this upload")
                 go.agebridge.Agebridge.validateRecipients(config.ageRecipients)
                 val encrypted = File(cacheDir, "encrypted-${UUID.randomUUID()}.age")
                 staged.add(encrypted)
@@ -40,7 +47,10 @@ internal object MultipartUploader {
                 uploadName = "attachment.age"
                 mime = "application/octet-stream"
             }
+            checkCancelled()
             uploadPrepared(config, file, uploadName, mime, proxy)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             FilehostUpload.Result(null, if (config.useOrbot) "Tor upload failed. Check that Orbot is running on 127.0.0.1:9050: ${e.message ?: e.javaClass.simpleName}"
                 else "Upload failed: ${e.message ?: e.javaClass.simpleName}")
@@ -53,7 +63,7 @@ internal object MultipartUploader {
     internal fun uploadPrepared(config: UploaderConfig, file: File, name: String, mime: String,
                                 proxy: ProxyConfig): FilehostUpload.Result {
         config.validate()?.let { return FilehostUpload.Result(null, it) }
-        val client = RemoteContentHttp.client(config.uploadProxy(proxy)).newBuilder()
+        val client = RemoteContentHttp.client(config.uploadProxy(proxy), allowHttpEndpoint = config.endpoint.takeIf { config.allowHttp }).newBuilder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
             .writeTimeout(120, TimeUnit.SECONDS)

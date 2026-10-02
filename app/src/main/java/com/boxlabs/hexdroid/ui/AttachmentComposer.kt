@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -58,9 +59,10 @@ internal fun rememberAttachmentActions(
     val liveLink by rememberUpdatedState(onLink)
     val jobs = remember(actions) { mutableStateListOf<AttachmentJob>() }
     val prefs = remember(ctx) { ctx.getSharedPreferences("attachment_history", Context.MODE_PRIVATE) }
-    var pickerTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var captureFile by remember { mutableStateOf<File?>(null) }
-    var captureTarget by remember { mutableStateOf<Pair<String, AttachmentActions>?>(null) }
+    var pickerNetwork by rememberSaveable { mutableStateOf<String?>(null) }
+    var pickerBuffer by rememberSaveable { mutableStateOf<String?>(null) }
+    var capturePath by rememberSaveable { mutableStateOf<String?>(null) }
+    var captureBuffer by rememberSaveable { mutableStateOf<String?>(null) }
 
     fun message(text: String) = Toast.makeText(ctx, text, Toast.LENGTH_LONG).show()
     fun saveHistory(record: AttachmentRecord) {
@@ -106,49 +108,49 @@ internal fun rememberAttachmentActions(
         uris.forEach { jobs.add(AttachmentJob(it, networkId = target.first, bufferKey = target.second)) }
         pump()
     }
-    val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { enqueue(it, pickerTarget ?: (networkId to bufferKey)); pickerTarget = null }
-    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { enqueue(it, pickerTarget ?: (networkId to bufferKey)); pickerTarget = null }
+    val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { enqueue(it, (pickerNetwork ?: networkId) to (pickerBuffer ?: bufferKey)); pickerNetwork = null; pickerBuffer = null }
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { enqueue(it, (pickerNetwork ?: networkId) to (pickerBuffer ?: bufferKey)); pickerNetwork = null; pickerBuffer = null }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-        val file = captureFile
-        val target = captureTarget
+        val file = capturePath?.let(::File)
+        val target = captureBuffer
         if (file != null && success && target != null) {
             // Retain the destination selected when capture launched.
             val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
-            target.second.uploading = true
-            viewModel?.uploadFileToFilehost(target.first.substringBefore("::"), uri) { url, error ->
-                if (url != null) { saveHistory(AttachmentRecord(file.name, url, false)); liveLink(target.first, url) }
+            actions.uploading = true
+            viewModel?.uploadFileToFilehost(target.substringBefore("::"), uri) { url, error ->
+                if (url != null) { saveHistory(AttachmentRecord(file.name, url, false)); liveLink(target, url) }
                 else message(error ?: "Upload failed")
-                file.delete(); target.second.uploading = false; pump()
+                file.delete(); actions.uploading = false; pump()
             }
         } else file?.delete()
-        captureFile = null; captureTarget = null
+        capturePath = null; captureBuffer = null
     }
     val video = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { success ->
-        val file = captureFile
-        val target = captureTarget
+        val file = capturePath?.let(::File)
+        val target = captureBuffer
         if (file != null && success && target != null) {
             val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
-            target.second.uploading = true
-            viewModel?.uploadFileToFilehost(target.first.substringBefore("::"), uri) { url, error ->
-                if (url != null) { saveHistory(AttachmentRecord(file.name, url, false)); liveLink(target.first, url) }
+            actions.uploading = true
+            viewModel?.uploadFileToFilehost(target.substringBefore("::"), uri) { url, error ->
+                if (url != null) { saveHistory(AttachmentRecord(file.name, url, false)); liveLink(target, url) }
                 else message(error ?: "Upload failed")
-                file.delete(); target.second.uploading = false; pump()
+                file.delete(); actions.uploading = false; pump()
             }
         } else file?.delete()
-        captureFile = null; captureTarget = null
+        capturePath = null; captureBuffer = null
     }
     fun capture(extension: String, launch: (Uri) -> Unit) {
         runCatching {
             val dir = File(ctx.cacheDir, "attachments").apply { mkdirs() }
             val file = File.createTempFile("capture-", extension, dir)
-            captureFile = file; captureTarget = bufferKey to actions
+            capturePath = file.path; captureBuffer = bufferKey
             launch(FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file))
-        }.onFailure { captureFile?.delete(); captureFile = null; captureTarget = null; message(it.message ?: "Camera unavailable") }
+        }.onFailure { capturePath?.let(::File)?.delete(); capturePath = null; captureBuffer = null; message(it.message ?: "Camera unavailable") }
     }
     actions.photo = { capture(".jpg") { camera.launch(it) } }
     actions.video = { capture(".mp4") { video.launch(it) } }
-    actions.images = { pickerTarget = networkId to bufferKey; imagePicker.launch("image/*") }
-    actions.documents = { pickerTarget = networkId to bufferKey; documentPicker.launch(arrayOf("*/*")) }
+    actions.images = { pickerNetwork = networkId; pickerBuffer = bufferKey; imagePicker.launch("image/*") }
+    actions.documents = { pickerNetwork = networkId; pickerBuffer = bufferKey; documentPicker.launch(arrayOf("*/*")) }
     actions.paste = {
         val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         val uris = attachmentUris(clipboard.primaryClip)

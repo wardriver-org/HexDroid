@@ -1647,7 +1647,7 @@ fun ChatScreen(
         // so the URL is fetchable (a literal {size} would 404).
         val url = raw.replace("{size}", "64")
         if (!url.startsWith("https://")) return null
-        if (!state.settings.imagePreviewsEnabled) return null
+        if (!state.settings.imagePreviewsEnabled || state.settings.previewsUseOrbot) return null
         val unproxied = state.networks.firstOrNull { it.id == netId }?.proxyType ==
             com.boxlabs.hexdroid.connection.ProxyType.NONE
         return if (unproxied) url else null

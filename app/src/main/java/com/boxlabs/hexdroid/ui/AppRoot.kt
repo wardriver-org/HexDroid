@@ -282,7 +282,8 @@ fun AppRoot(
 
             when (state.screen) {
                 AppScreen.CHAT -> RemoteContentScope(remoteContentPool, vm, state.selectedBuffer.substringBefore("::"),
-                    state.networks.firstOrNull { it.id == state.selectedBuffer.substringBefore("::") }?.proxyType != com.boxlabs.hexdroid.connection.ProxyType.NONE, state.networks.firstOrNull { it.id == state.selectedBuffer.substringBefore("::") }) {
+                    state.settings.previewsUseOrbot || state.networks.firstOrNull { it.id == state.selectedBuffer.substringBefore("::") }?.proxyType != com.boxlabs.hexdroid.connection.ProxyType.NONE,
+                    state.networks.firstOrNull { it.id == state.selectedBuffer.substringBefore("::") } to state.settings.previewsUseOrbot) {
                     ChatScreen(
                     state = state,
                     onSelectBuffer = vm::openBuffer,
@@ -540,12 +541,18 @@ fun AppRoot(
     }
 
     mountedScriptView?.let { mv ->
+        val networkId = state.activeNetworkId.orEmpty()
+        val profile = state.networks.firstOrNull { it.id == networkId }
+        RemoteContentScope(remoteContentPool, vm, networkId,
+            state.settings.previewsUseOrbot || profile?.proxyType != com.boxlabs.hexdroid.connection.ProxyType.NONE,
+            profile to state.settings.previewsUseOrbot) {
         ScriptViewHost(
             view = mv,
             onAction = vm::scriptViewAction,
             onClose = vm::closeScriptView,
             onScreenChanged = vm::scriptScreenChanged,
         )
+        }
     }
 }
 

@@ -21,7 +21,7 @@ internal fun UploaderSettings(s: UiSettings, update: (UiSettings.() -> UiSetting
         }
         Text("Uploads are off until enabled. Choose where attachments and snippets are hosted.", style = MaterialTheme.typography.bodySmall)
         if (s.uploadsEnabled) {
-            Text("Images are stripped of metadata and converted to PNG before uploading. Animated images become a still frame; unsupported images are blocked.", style = MaterialTheme.typography.bodySmall)
+            Text("Uploads are limited to 64 MiB. Images up to 16 megapixels are stripped of metadata and converted to PNG before uploading. Animated images become a still frame; unsupported images are blocked.", style = MaterialTheme.typography.bodySmall)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Encrypt uploads with age")
                 Switch(s.uploadAgeEnabled, { value -> update { copy(uploadAgeEnabled = value) } })

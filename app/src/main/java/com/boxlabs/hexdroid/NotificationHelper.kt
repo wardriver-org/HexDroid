@@ -211,7 +211,7 @@ class NotificationHelper(private val ctx: Context) {
     }
 
     private fun actionPendingIntent(networkId: String, action: String, stableRequestCode: Int = -1): PendingIntent? {
-        val i = Intent(ctx, MainActivity::class.java)
+        val i = Intent(ctx, NotificationActivity::class.java)
             .putExtra(EXTRA_NETWORK_ID, networkId)
             .putExtra(EXTRA_ACTION, action)
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or
@@ -221,7 +221,7 @@ class NotificationHelper(private val ctx: Context) {
     }
 
     private fun openBufferPendingIntent(networkId: String, buffer: String, msgId: Long = -1L, msgAnchor: String? = null, stableRequestCode: Int = -1): PendingIntent? {
-        val i = Intent(ctx, MainActivity::class.java).apply {
+        val i = Intent(ctx, NotificationActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             // Extras do not participate in PendingIntent identity. Distinguish each
             // conversation from other chats and the fixed-code connection actions,
@@ -240,7 +240,7 @@ class NotificationHelper(private val ctx: Context) {
     }
 
     private fun openTransfersPendingIntent(networkId: String, stableRequestCode: Int = -1): PendingIntent? {
-        val i = Intent(ctx, MainActivity::class.java).apply {
+        val i = Intent(ctx, NotificationActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(EXTRA_NETWORK_ID, networkId)
             putExtra(EXTRA_ACTION, ACTION_OPEN_TRANSFERS)
@@ -407,7 +407,7 @@ class NotificationHelper(private val ctx: Context) {
     fun notifyDccIncomingFile(networkId: String, from: String, filename: String) {
         ensureChannels()
         val notifId = nextNotifId()
-        val acceptIntent = Intent(ctx, MainActivity::class.java).apply {
+        val acceptIntent = Intent(ctx, NotificationActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(EXTRA_NETWORK_ID, networkId)
             putExtra(EXTRA_ACTION, ACTION_ACCEPT_DCC)

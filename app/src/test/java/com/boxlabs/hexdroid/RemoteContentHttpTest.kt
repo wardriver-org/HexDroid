@@ -99,7 +99,8 @@ class RemoteContentHttpTest {
                 }
             }
             val client = RemoteContentHttp.client(ProxyConfig(type, "127.0.0.1", server.localPort,
-                if (auth) "proxy-user" else null, if (auth) "proxy-pass" else null))
+                if (auth) "proxy-user" else null, if (auth) "proxy-pass" else null),
+                allowHttpEndpoint = "http://does-not-resolve.invalid/image.png")
             try {
                 if (upload) {
                     val file = File.createTempFile("upload-test-", ".txt")

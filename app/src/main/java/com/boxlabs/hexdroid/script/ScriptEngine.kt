@@ -250,10 +250,6 @@ class ScriptEngine(
             owner: String,
             onResult: (HttpResult) -> Unit,
         ) {
-            if (!host.isNetworkAllowed(url)) {
-                host.runOnScriptThread { onResult(HttpResult(false, 0, "", "network not permitted: $url")) }
-                return
-            }
             val gen = generation
             host.mediaUpload(ScriptUploadRequest(url, token, field, headers, formFields, owner)) { resp ->
                 host.runOnScriptThread {

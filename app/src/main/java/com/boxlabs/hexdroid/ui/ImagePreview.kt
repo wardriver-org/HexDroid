@@ -45,6 +45,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -83,6 +84,8 @@ private data class TwitterUrlData(
 )
 
 private fun extractTwitterData(url: String): TwitterUrlData? {
+    val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return null
+    if (uri.rawUserInfo != null || uri.host?.lowercase() !in setOf("twitter.com", "www.twitter.com", "x.com", "www.x.com")) return null
     val m = twitterRegex.find(url) ?: return null
     val user = m.groupValues[1]
     // Filter out Twitter UI path segments that aren't usernames
@@ -121,10 +124,10 @@ private suspend fun fetchTwitterMeta(data: TwitterUrlData, ctx: Context, client:
             .url(apiUrl)
             .header("User-Agent", "HexDroid IRC")
             .build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return@use null
-            val json = org.json.JSONObject(response.body.string())
-            val tweet = json.optJSONObject("tweet") ?: return@use null
+        PreviewRequests.fetch(client, request) response@ { response ->
+            if (!response.isSuccessful) return@response null
+            val json = org.json.JSONObject(String(com.boxlabs.hexdroid.PreviewPolicy.readBounded(response.body.byteStream(), 256 * 1024), Charsets.UTF_8))
+            val tweet = json.optJSONObject("tweet") ?: return@response null
             val media = tweet.optJSONObject("media")
 
             // Prefer video thumbnail
@@ -136,19 +139,19 @@ private suspend fun fetchTwitterMeta(data: TwitterUrlData, ctx: Context, client:
                 // Keep it only if it passes the CDN-host check; otherwise leave it null and
                 // the UI falls back to opening the tweet externally.
                 val vurl = v.optString("url").takeIf { isPlayableTwitterVideoUrl(it) }
-                if (thumb != null) return@use TwitterMeta(thumb, true, vurl, data.originalUrl)
+                if (thumb != null) return@response TwitterMeta(thumb, true, vurl, data.originalUrl)
             }
 
             // Fall back to first photo
             val photos = media?.optJSONArray("photos")
             if (photos != null && photos.length() > 0) {
                 val photoUrl = photos.getJSONObject(0).optString("url").takeIf { it.isNotBlank() }
-                if (photoUrl != null) return@use TwitterMeta(photoUrl, false, null, data.originalUrl)
+                if (photoUrl != null) return@response TwitterMeta(photoUrl, false, null, data.originalUrl)
             }
 
             null // text-only tweet — nothing to preview
         }
-    }.getOrNull()
+    }.getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it; null }
 }
 
 // YouTube
@@ -157,8 +160,12 @@ private val ytRegex = Regex(
     """(?:(?:[a-z]+\.)?youtube\.com/watch\?(?:[^&]*&)*v=|youtu\.be/|(?:[a-z]+\.)?youtube\.com/embed/|(?:[a-z]+\.)?youtube\.com/shorts/)([A-Za-z0-9_-]{11})"""
 )
 
-fun extractYouTubeId(url: String): String? =
-    ytRegex.find(url)?.groupValues?.get(1)?.takeIf { it.length == 11 }
+fun extractYouTubeId(url: String): String? {
+    val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return null
+    if (uri.rawUserInfo != null || uri.host?.lowercase() !in
+        setOf("youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be")) return null
+    return ytRegex.find(url)?.groupValues?.get(1)?.takeIf { it.length == 11 }
+}
 
 private fun youtubeThumbnailUrl(videoId: String) =
     "https://img.youtube.com/vi/$videoId/hqdefault.jpg"
@@ -207,7 +214,7 @@ private val allowedMimeTypes = setOf(
 )
 
 private sealed interface FetchResult {
-    data class Success(val bitmap: Bitmap?, val rawBytes: ByteArray? = null, val isGif: Boolean = false) : FetchResult
+    data class Success(val bitmap: Bitmap?, val rawBytes: ByteArray? = null, val isGif: Boolean = false, val pageTitle: String? = null) : FetchResult
     data object TooLarge : FetchResult
     data object Error : FetchResult   // network, 404, decode failure, timeout, etc.
 }
@@ -218,10 +225,11 @@ private sealed interface FetchResult {
 
 private fun httpClient(ctx: Context): OkHttpClient =
     _httpClient ?: synchronized(OkHttpClient::class.java) {
-        _httpClient ?: OkHttpClient.Builder()
+        _httpClient ?: com.boxlabs.hexdroid.RemoteContentHttp.client(com.boxlabs.hexdroid.connection.ProxyConfig(), preview = true).newBuilder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .callTimeout(20, TimeUnit.SECONDS)
+            .followSslRedirects(false)
             .cache(
                 okhttp3.Cache(
                     java.io.File(ctx.applicationContext.cacheDir, "image_preview_cache"),
@@ -238,7 +246,7 @@ private suspend fun fetchBitmap(url: String, ctx: Context, client: OkHttpClient)
     // a non-https URL (e.g. file://, http://, or a redirect to a private IP range), we could
     // inadvertently expose internal resources or send unencrypted traffic. Only https:// is
     // a legitimate source for image previews in a chat client.
-    if (!url.startsWith("https://", ignoreCase = true)) return@withContext FetchResult.Error
+    if (!url.startsWith("https://", ignoreCase = true) && !com.boxlabs.hexdroid.HttpPolicy.isOnion(url)) return@withContext FetchResult.Error
 
     runCatching {
         val request = Request.Builder()
@@ -246,15 +254,34 @@ private suspend fun fetchBitmap(url: String, ctx: Context, client: OkHttpClient)
             .header("User-Agent", "HexDroid IRC")
             .build()
 
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return@runCatching FetchResult.Error
+        PreviewRequests.fetch(client, request) response@ { response ->
+            if (!response.isSuccessful) return@response FetchResult.Error
 
             val mime = response.body.contentType()?.let { "${it.type}/${it.subtype}" }
-            if (mime == null || mime !in allowedMimeTypes) return@runCatching FetchResult.Error
+            if (mime == "text/html" && com.boxlabs.hexdroid.HttpPolicy.isOnion(url)) {
+                // Read only a title, never execute HTML or fetch page subresources.
+                val html = response.body.byteStream().use { input ->
+                    val output = ByteArrayOutputStream()
+                    val chunk = ByteArray(4096)
+                    while (output.size() < 65536) {
+                        val n = input.read(chunk, 0, minOf(chunk.size, 65536 - output.size()))
+                        if (n < 0) break
+                        output.write(chunk, 0, n)
+                    }
+                    output.toString("UTF-8")
+                }
+                val rawTitle = Regex("<title[^>]*>(.*?)</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                    .find(html)?.groupValues?.get(1)?.take(2048)
+                val title = rawTitle?.let { android.text.Html.fromHtml(it, android.text.Html.FROM_HTML_MODE_LEGACY).toString() }
+                    ?.replace(Regex("[\\p{Cntrl}\\s]+"), " ")?.trim()?.take(200)
+                    ?.takeIf { it.isNotEmpty() } ?: "Onion page"
+                return@response FetchResult.Success(bitmap = null, pageTitle = title)
+            }
+            if (mime == null || mime !in allowedMimeTypes) return@response FetchResult.Error
 
             val cap = 5 * 1024 * 1024L
             val contentLength = response.header("Content-Length")?.toLongOrNull() ?: 0L
-            if (contentLength > cap) return@runCatching FetchResult.TooLarge
+            if (contentLength > cap) return@response FetchResult.TooLarge
 
             // Secure hard-capped read
             response.body.byteStream().use { input ->
@@ -265,7 +292,7 @@ private suspend fun fetchBitmap(url: String, ctx: Context, client: OkHttpClient)
 
                 while (input.read(buffer).also { bytesRead = it } != -1) {
                     total += bytesRead
-                    if (total > cap) return@runCatching FetchResult.TooLarge // reject
+                    if (total > cap) return@response FetchResult.TooLarge // reject
                     output.write(buffer, 0, bytesRead)
                 }
 
@@ -275,9 +302,13 @@ private suspend fun fetchBitmap(url: String, ctx: Context, client: OkHttpClient)
                 // Animated GIFs are rendered from rawBytes via ImageDecoder/Movie in
                 // AnimatedGif; Skip the decode entirely and carry
                 // only the raw bytes. bitmap is null for GIFs.
-                if (isGif) return@runCatching FetchResult.Success(
-                    bitmap = null, rawBytes = bytes, isGif = true
-                )
+                if (isGif) {
+                    val probe = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, probe)
+                    if (probe.outWidth <= 0 || probe.outHeight <= 0 ||
+                        probe.outWidth.toLong() * probe.outHeight > 16_000_000L) return@response FetchResult.TooLarge
+                    return@response FetchResult.Success(bitmap = null, rawBytes = bytes, isGif = true)
+                }
 
                 // Decode as software ARGB_8888 with premultiplied alpha: a hardware bitmap or a
                 // non-premultiplied one throws when Compose draws it.
@@ -287,6 +318,8 @@ private suspend fun fetchBitmap(url: String, ctx: Context, client: OkHttpClient)
                 var inSample = 1
                 BitmapFactory.Options().apply { inJustDecodeBounds = true }.also { probe ->
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, probe)
+                    if (probe.outWidth <= 0 || probe.outHeight <= 0 ||
+                        probe.outWidth.toLong() * probe.outHeight > 16_000_000L) return@response FetchResult.TooLarge
                     val largest = maxOf(probe.outWidth, probe.outHeight)
                     while (largest > 0 && largest / inSample > targetMaxDim) inSample *= 2
                 }
@@ -302,7 +335,7 @@ private suspend fun fetchBitmap(url: String, ctx: Context, client: OkHttpClient)
                 } ?: FetchResult.Error
             }
         }
-    }.getOrDefault(FetchResult.Error)
+    }.getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it; FetchResult.Error }
 }
 
 // Preview states
@@ -320,6 +353,7 @@ private sealed interface PreviewState {
         val twitterUrl: String = "",
         /** Playable video URL for a Twitter/X video, or null to fall back to opening externally. */
         val twitterVideoUrl: String? = null,
+        val pageTitle: String? = null,
     ) : PreviewState
     data class  Failed(val message: String) : PreviewState   // a friendly message
 }
@@ -368,7 +402,7 @@ private fun YouTubePlayer(videoId: String, onClose: () -> Unit) {
                 }
             },
             modifier = Modifier.fillMaxSize(),
-            onRelease = { it.release() },
+            onRelease = { lifecycleOwner.lifecycle.removeObserver(it); it.release() },
         )
         IconButton(
             onClick = onClose,
@@ -483,34 +517,45 @@ private fun TwitterVideoPlayer(videoUrl: String, onClose: () -> Unit) {
  */
 @Composable
 private fun AnimatedGif(bytes: ByteArray, modifier: Modifier = Modifier) {
-    AndroidView(
-        factory = { ctx ->
-            android.widget.ImageView(ctx).apply {
-                scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+    var drawable by remember(bytes) { mutableStateOf<android.graphics.drawable.Drawable?>(null) }
+    val context = LocalContext.current
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(bytes) {
+        drawable = withContext(Dispatchers.Default) {
+            runCatching {
                 if (android.os.Build.VERSION.SDK_INT >= 28) {
-                    val source = android.graphics.ImageDecoder.createSource(
-                        java.nio.ByteBuffer.wrap(bytes)
-                    )
-                    runCatching {
-                        val drawable = android.graphics.ImageDecoder.decodeDrawable(source)
-                        setImageDrawable(drawable)
-                        (drawable as? android.graphics.drawable.AnimatedImageDrawable)?.start()
+                    val source = android.graphics.ImageDecoder.createSource(java.nio.ByteBuffer.wrap(bytes))
+                    android.graphics.ImageDecoder.decodeDrawable(source) { decoder, info, _ ->
+                        val scale = minOf(1.0, 1600.0 / maxOf(info.size.width, info.size.height))
+                        decoder.setTargetSize(maxOf(1, (info.size.width * scale).toInt()), maxOf(1, (info.size.height * scale).toInt()))
                     }
                 } else {
-                    // API 26/27: use Movie for GIF playback via a custom drawable.
-                    // Movie is deprecated in API 29 but is the only option below API 28.
-                    @Suppress("DEPRECATION")
-                    val movie = android.graphics.Movie.decodeByteArray(bytes, 0, bytes.size)
-                    if (movie != null) {
-                        setImageDrawable(MovieDrawable(movie))
-                    } else {
-                        setImageBitmap(android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+                    // Older devices show a bounded still frame instead of unbounded Movie decoding.
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                    var sample = 1
+                    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1600) sample *= 2
+                    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.let {
+                        android.graphics.drawable.BitmapDrawable(context.resources, it)
                     }
                 }
-            }
-        },
-        modifier = modifier,
-    )
+            }.getOrNull()
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(drawable, lifecycle) {
+        val animation = drawable as? android.graphics.drawable.Animatable
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_START) animation?.start()
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) animation?.stop()
+        }
+        lifecycle.addObserver(observer)
+        if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) animation?.start()
+        onDispose { animation?.stop(); lifecycle.removeObserver(observer) }
+    }
+    AndroidView(factory = { ctx -> android.widget.ImageView(ctx).apply {
+        scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+    } }, update = { it.setImageDrawable(drawable) }, modifier = modifier)
 }
 
 /**
@@ -551,20 +596,21 @@ fun InlinePreview(
 ) {
     if (!previewsEnabled) return
 
-    val transport = LocalRemoteContent.current
+    val onion = remember(url) { com.boxlabs.hexdroid.HttpPolicy.isOnion(url) }
+    val transport = if (onion) LocalOrbotRemoteContent.current else LocalRemoteContent.current
     val context = LocalContext.current
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
 
-    val youtubeId   = remember(url) { extractYouTubeId(url) }
-    val twitterData = remember(url) { extractTwitterData(url) }
+    val youtubeId   = remember(url) { if (onion) null else extractYouTubeId(url) }
+    val twitterData = remember(url) { if (onion) null else extractTwitterData(url) }
     val isImage     = remember(url) { isPreviewableImageUrl(url) }
 
-    if (youtubeId == null && twitterData == null && !isImage) return
+    if (youtubeId == null && twitterData == null && !isImage && !onion) return
 
-    // Auto-load thumbnails for YouTube only; Twitter/X requires an explicit tap.
+    // Onion previews always use their dedicated Orbot route; Twitter/X requires a tap.
     // Twitter images can be sensitive or high-bandwidth, and the fxtwitter API
     // call leaks the URL to a third party — opt-in is the right default.
-    val autoLoad = youtubeId != null
+    val autoLoad = youtubeId != null || onion
 
     var state        by rememberSaveable(url, stateSaver = previewStateSaver) {
         mutableStateOf(if (autoLoad) PreviewState.Loading else PreviewState.Idle)
@@ -573,20 +619,22 @@ fun InlinePreview(
     // Not rememberSaveable: playing state must reset when scrolled away.
     var isPlaying     by remember(url) { mutableStateOf(false) }
 
-    LaunchedEffect(url, loadRequested, transport) {
-        if (!loadRequested) return@LaunchedEffect
-        if (state is PreviewState.Ready) return@LaunchedEffect
+    val previewLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(url, loadRequested, transport, previewLifecycle) {
+      previewLifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+        if (!loadRequested) return@repeatOnLifecycle
+        if (state is PreviewState.Ready) return@repeatOnLifecycle
         if (wifiOnly && !isOnWifi(context)) {
             state = PreviewState.Failed(context.getString(R.string.img_wifi_only))
-            return@LaunchedEffect
+            return@repeatOnLifecycle
         }
 
         state = PreviewState.Loading
-        val client = try { if (youtubeId != null) httpClient(context) else transport?.client() ?: httpClient(context) } catch (e: kotlinx.coroutines.CancellationException) {
+        val client = try { if (youtubeId != null) httpClient(context) else transport?.client() ?: throw java.io.IOException("Preview route unavailable") } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (_: Exception) {
             state = PreviewState.Failed(context.getString(R.string.img_failed_load))
-            return@LaunchedEffect
+            return@repeatOnLifecycle
         }
 
         when {
@@ -623,12 +671,14 @@ fun InlinePreview(
                         bitmap = result.bitmap,
                         rawBytes = result.rawBytes,
                         isGif = result.isGif,
+                        pageTitle = result.pageTitle,
                     )
                     FetchResult.TooLarge   -> state = PreviewState.Failed(context.getString(R.string.img_too_large))
                     FetchResult.Error      -> state = PreviewState.Failed(context.getString(R.string.img_failed_load))
                 }
             }
         }
+    }
     }
 
     when (val s = state) {
@@ -706,7 +756,12 @@ fun InlinePreview(
                             }),
                         contentAlignment = Alignment.Center,
                     ) {
-                        if (s.isGif && s.rawBytes != null) {
+                        if (s.pageTitle != null) {
+                            androidx.compose.foundation.layout.Column(Modifier.fillMaxWidth().padding(16.dp).padding(end = 28.dp)) {
+                                androidx.compose.material3.Text(s.pageTitle, style = MaterialTheme.typography.titleSmall)
+                                androidx.compose.material3.Text("Loaded through Orbot", style = MaterialTheme.typography.labelSmall)
+                            }
+                        } else if (s.isGif && s.rawBytes != null) {
                             AnimatedGif(
                                 bytes = s.rawBytes,
                                 modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp),
