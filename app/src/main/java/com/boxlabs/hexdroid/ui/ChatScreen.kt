@@ -39,6 +39,9 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -1320,6 +1323,7 @@ fun ChatScreen(
         lagLabel: String? = null,
         lagProgress: Float? = null,
         networkIconUrl: String? = null,
+        restoreNetworkWindow: Boolean = false,
     ) {
         val unread = meta?.unread ?: 0
         val hi = meta?.highlights ?: 0
@@ -1330,7 +1334,8 @@ fun ChatScreen(
                 .focusHighlight()
                 .clickable {
                     scope.launch { if (!isWide) drawerState.close() }
-                    onSelectBuffer(key)
+                    if (restoreNetworkWindow && viewModel != null) viewModel.openNetworkWindow(splitKey(key).first)
+                    else onSelectBuffer(key)
                 }
                 .padding(start = indent, end = 12.dp, top = 8.dp, bottom = 8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -2029,6 +2034,21 @@ fun ChatScreen(
 				)
 			}
 
+            val pinned = state.settings.pinnedChannels.filter { it in state.buffers }
+            if (pinned.isNotEmpty()) {
+                Text("Pinned channels", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary)
+                Column(Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
+                    pinned.sortedBy { splitKey(it).second.lowercase() }.forEach { key ->
+                        val (networkId, channel) = splitKey(key)
+                        val network = state.networks.firstOrNull { it.id == networkId }?.name ?: networkId
+                        BufferRow(key, "$channel · $network", selected, state.buffers[key], 0.dp,
+                            closable = false, onClose = {})
+                    }
+                }
+                HorizontalDivider()
+            }
+
 			// Current display order of root netIds - kept in sync with sidebarItems
 			val netOrder = remember(sidebarItems) {
 				sidebarItems.mapNotNull { item ->
@@ -2127,7 +2147,7 @@ fun ChatScreen(
 							for (k in keys) { val b = state.buffers[k] ?: continue; unread += b.unread; hi += b.highlights }
 							Tab(
 								selected = i == selIdx,
-								onClick = { pickedNet = net.id },
+								onClick = { pickedNet = net.id; viewModel?.openNetworkWindow(net.id) },
 								modifier = Modifier.focusHighlight(),
 								text = {
 									Row(
@@ -2316,6 +2336,7 @@ fun ChatScreen(
 										} else state.buffers[item.key]
 										BufferRow(
 											key = item.key,
+                                            restoreNetworkWindow = item.isNetworkHeader,
 											label = item.label,
 											selected = selected,
 											meta = rowMeta,
@@ -2938,6 +2959,7 @@ fun ChatScreen(
                         }
                     }
 
+                    if (state.settings.alwaysShowChatControls) {
                     // Colour/formatting picker button. No background: the sweep gradient
                     // is painted onto the FormatColorText glyph itself (SrcAtop over an
                     // offscreen layer masks it to the icon shape). When formatting is
@@ -3010,6 +3032,8 @@ fun ChatScreen(
                         }
                     }
 
+                    }
+                    if (state.settings.alwaysShowChatControls) {
                     // Nicklist button. No background: flat theme-tinted icon (dimmed to
                     // 40% when the current buffer isn't a channel, so it still reads as
                     // unavailable now that the coloured pill is gone).
@@ -3051,6 +3075,7 @@ fun ChatScreen(
                         }
                     }
 
+                    }
                     if (scriptLaunchers.isNotEmpty()) {
                         Box {
                             BarIconButton(
@@ -3100,6 +3125,20 @@ fun ChatScreen(
                             )
 
                             val entries = buildList {
+                                if (isChannel) {
+                                    val pinKey = selected
+                                    val pinned = pinKey in state.settings.pinnedChannels
+                                    add(MenuEntry(if (pinned) "Unpin channel" else "Pin channel") {
+                                        overflowExpanded = false
+                                        onUpdateSettings { copy(pinnedChannels = if (pinned) pinnedChannels - pinKey else pinnedChannels + pinKey) }
+                                    })
+                                }
+                                add(MenuEntry("Text formatting") { overflowExpanded = false; showColorPicker = true })
+                                add(MenuEntry(if (state.showNickList || showNickSheet) "Hide nicklist" else "Show nicklist", isChannel) {
+                                    overflowExpanded = false
+                                    if (isWide || state.settings.portraitNicklistOverlay) onToggleNickList()
+                                    else { showNickSheet = !showNickSheet; if (showNickSheet) onRefreshNicklist() }
+                                })
                                 add(MenuEntry(stringResource(R.string.menu_channel_list)) { overflowExpanded = false; onOpenList() })
                                 add(MenuEntry(stringResource(R.string.menu_file_transfers)) { overflowExpanded = false; onOpenTransfers() })
                                 // Encryption is only meaningful for channel/query buffers, not the
@@ -3131,9 +3170,8 @@ fun ChatScreen(
                                 add(MenuEntry(stringResource(R.string.menu_settings)) { overflowExpanded = false; onOpenSettings() })
                                 add(MenuEntry("Scripts") { overflowExpanded = false; onOpenScripts() })
                                 add(MenuEntry(stringResource(R.string.menu_networks)) { overflowExpanded = false; onOpenNetworks() })
-                                if (isIrcOper) {
-                                    add(MenuEntry(stringResource(R.string.menu_ircop_tools)) { overflowExpanded = false; showIrcOpTools = true })
-                                }
+                                add(MenuEntry("IRC Operator", selNetId.isNotBlank()) { overflowExpanded = false; showIrcOpTools = true })
+                                add(MenuEntry("Oper Events", selNetId.isNotBlank()) { overflowExpanded = false; viewModel?.openOperEvents(selNetId) })
                                 add(MenuEntry(stringResource(R.string.menu_about)) { overflowExpanded = false; onAbout() })
                                 if (onEnterFloating != null) {
                                     add(MenuEntry(stringResource(R.string.menu_float)) { overflowExpanded = false; onEnterFloating() })
@@ -4002,7 +4040,7 @@ fun ChatScreen(
                             val hi = b?.highlights ?: 0
                             Tab(
                                 selected = i == barSelIdx,
-                                onClick = { onSelectBuffer(key) },
+                                onClick = { if (isServerTab && viewModel != null) viewModel.openNetworkWindow(keyNet) else onSelectBuffer(key) },
                                 modifier = Modifier.focusHighlight(),
                                 text = {
                                     Row(
@@ -4130,10 +4168,14 @@ fun ChatScreen(
                     else -> "Several people are typing"
                 }
                 // Animate three dots cycling 0→1→2→3 dots every 500ms.
-                val dotCount by produceState(initialValue = 0) {
-                    while (true) {
-                        kotlinx.coroutines.delay(500L)
-                        value = (value + 1) % 4
+                val typingLifecycle = LocalLifecycleOwner.current.lifecycle
+                val dotCount by produceState(initialValue = 0, key1 = typingLifecycle) {
+                    typingLifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                        value = 0
+                        while (true) {
+                            kotlinx.coroutines.delay(500L)
+                            value = (value + 1) % 4
+                        }
                     }
                 }
                 val dots = ".".repeat(dotCount).padEnd(3, ' ')  // keeps width stable
@@ -4230,7 +4272,9 @@ fun ChatScreen(
                     }
                 }
                 if (state.settings.uploadsEnabled && viewModel != null && state.connections[selNetId] != null) {
-                    AttachmentButton(attachments)
+                    AttachmentButton(attachments, state.settings) { enabled ->
+                        onUpdateSettings { copy(uploadDropFoTor = enabled) }
+                    }
                 }
                 // Build the text style for the input based on active formatting
                 val defaultTextColor = MaterialTheme.colorScheme.onSurface
@@ -5047,218 +5091,11 @@ fun ChatScreen(
     }
 
     // IRCop tools
-    if (showIrcOpTools) {
-        // Insets are handled by the content, not the sheet: see the note on the channel
-        // tools sheet above.
-        ModalBottomSheet(
-            onDismissRequest = { showIrcOpTools = false },
-            contentWindowInsets = { WindowInsets(0) },
-        ) {
-            val scrollState = rememberScrollState()
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.92f)
-                    .padding(16.dp)
-                    .navigationBarsPadding()
-                    .imePadding()
-                    .verticalScroll(scrollState),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Default.AdminPanelSettings,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary)
-                    Text(stringResource(R.string.chat_ircop_tools), style = MaterialTheme.typography.titleLarge)
-                }
-                Text("$selNetName", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                HorizontalDivider()
-
-                var opTarget by remember { mutableStateOf("") }
-                var opReason by remember { mutableStateOf("") }
-                var opDuration by remember { mutableStateOf("") }
-                var opServer by remember { mutableStateOf("") }
-                var opMessage by remember { mutableStateOf("") }
-
-                // Target / Reason fields
-                Text(stringResource(R.string.chat_target_label), fontWeight = FontWeight.Bold)
-                OutlinedTextField(
-                    value = opTarget, onValueChange = { opTarget = it },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    label = { Text(stringResource(R.string.chat_nick_mask_label)) }
-                )
-                OutlinedTextField(
-                    value = opReason, onValueChange = { opReason = it },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    label = { Text(stringResource(R.string.chat_reason)) }
-                )
-                // Duration for the timed *-line / shun commands. Format is server-specific
-                // (e.g. "1d", "2h", "30" minutes); "0" usually means permanent.
-                OutlinedTextField(
-                    value = opDuration, onValueChange = { opDuration = it },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    label = { Text(stringResource(R.string.chat_duration_label)) },
-                    supportingText = { Text(stringResource(R.string.chat_duration_hint)) }
-                )
-
-                // Kill / K-line / Z-line
-                Text(stringResource(R.string.chat_punishments), fontWeight = FontWeight.Bold)
-                val noReasonStr = stringResource(R.string.chat_no_reason)
-                // The timed line/shun commands take <mask> <duration> [reason]; require both a
-                // target and a duration so we never send a bare "<mask> <reason>" that the
-                // server would misparse.
-                val canLine = opTarget.isNotBlank() && opDuration.isNotBlank()
-                // FlowRow so the buttons wrap onto extra lines on narrow screens instead of
-                // overflowing off the right edge. Both rows of punishments are merged into one
-                // wrapping group.
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            val t = opTarget.trim()
-                            if (t.isNotBlank()) {
-                                val r = opReason.trim().ifBlank { noReasonStr }
-                                onSend("/kill $t $r")
-                                showIrcOpTools = false
-                            }
-                        },
-                        enabled = opTarget.isNotBlank(), modifier = Modifier.focusHighlight(RoundedCornerShape(50))
-                    ) { Text(stringResource(R.string.ircop_kill)) }
-                    OutlinedButton(
-                        onClick = {
-                            val t = opTarget.trim(); val d = opDuration.trim()
-                            if (t.isNotBlank() && d.isNotBlank()) {
-                                val r = opReason.trim().ifBlank { noReasonStr }
-                                onSend("/kline $t $d $r")
-                                showIrcOpTools = false
-                            }
-                        },
-                        enabled = canLine, modifier = Modifier.focusHighlight(RoundedCornerShape(50))
-                    ) { Text(stringResource(R.string.ircop_kline)) }
-                    OutlinedButton(
-                        onClick = {
-                            val t = opTarget.trim(); val d = opDuration.trim()
-                            if (t.isNotBlank() && d.isNotBlank()) {
-                                val r = opReason.trim().ifBlank { noReasonStr }
-                                onSend("/zline $t $d $r")
-                                showIrcOpTools = false
-                            }
-                        },
-                        enabled = canLine, modifier = Modifier.focusHighlight(RoundedCornerShape(50))
-                    ) { Text(stringResource(R.string.ircop_zline)) }
-                    OutlinedButton(
-                        onClick = {
-                            val t = opTarget.trim(); val d = opDuration.trim()
-                            if (t.isNotBlank() && d.isNotBlank()) {
-                                val r = opReason.trim().ifBlank { noReasonStr }
-                                onSend("/gline $t $d $r")
-                                showIrcOpTools = false
-                            }
-                        },
-                        enabled = canLine, modifier = Modifier.focusHighlight(RoundedCornerShape(50))
-                    ) { Text(stringResource(R.string.ircop_gline)) }
-                    OutlinedButton(
-                        onClick = {
-                            val t = opTarget.trim(); val d = opDuration.trim()
-                            if (t.isNotBlank() && d.isNotBlank()) {
-                                val r = opReason.trim().ifBlank { noReasonStr }
-                                onSend("/shun $t $d $r")
-                            }
-                        },
-                        enabled = canLine, modifier = Modifier.focusHighlight(RoundedCornerShape(50))
-                    ) { Text(stringResource(R.string.ircop_shun)) }
-                    OutlinedButton(
-                        onClick = {
-                            val t = opTarget.trim(); val d = opDuration.trim()
-                            if (t.isNotBlank() && d.isNotBlank()) {
-                                val r = opReason.trim().ifBlank { noReasonStr }
-                                onSend("/dline $t $d $r")
-                            }
-                        },
-                        enabled = canLine, modifier = Modifier.focusHighlight(RoundedCornerShape(50))
-                    ) { Text(stringResource(R.string.ircop_dline)) }
-                }
-
-                HorizontalDivider()
-
-                // Force join/part
-                Text(stringResource(R.string.chat_force_joinpart), fontWeight = FontWeight.Bold)
-                OutlinedTextField(
-                    value = opServer, onValueChange = { opServer = it },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    label = { Text(stringResource(R.string.chat_channel_label)) }
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            val t = opTarget.trim(); val ch = opServer.trim()
-                            if (t.isNotBlank() && ch.isNotBlank()) onSend("/sajoin $t $ch")
-                        },
-                        enabled = opTarget.isNotBlank() && opServer.isNotBlank(), modifier = Modifier.focusHighlight(RoundedCornerShape(50))
-                    ) { Text(stringResource(R.string.ircop_sajoin)) }
-                    OutlinedButton(
-                        onClick = {
-                            val t = opTarget.trim(); val ch = opServer.trim()
-                            if (t.isNotBlank() && ch.isNotBlank()) onSend("/sapart $t $ch")
-                        },
-                        enabled = opTarget.isNotBlank() && opServer.isNotBlank(), modifier = Modifier.focusHighlight(RoundedCornerShape(50))
-                    ) { Text(stringResource(R.string.ircop_sapart)) }
-                }
-
-                HorizontalDivider()
-
-                // Broadcast messages
-                Text(stringResource(R.string.chat_broadcast), fontWeight = FontWeight.Bold)
-                OutlinedTextField(
-                    value = opMessage, onValueChange = { opMessage = it },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    label = { Text(stringResource(R.string.chat_message_label)) }
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = { if (opMessage.isNotBlank()) onSend("/wallops ${opMessage.trim()}") },
-                        enabled = opMessage.isNotBlank(), modifier = Modifier.focusHighlight(RoundedCornerShape(50))
-                    ) { Text(stringResource(R.string.ircop_wallops)) }
-                    OutlinedButton(
-                        onClick = { if (opMessage.isNotBlank()) onSend("/globops ${opMessage.trim()}") },
-                        enabled = opMessage.isNotBlank(), modifier = Modifier.focusHighlight(RoundedCornerShape(50))
-                    ) { Text(stringResource(R.string.ircop_globops)) }
-                    OutlinedButton(
-                        onClick = { if (opMessage.isNotBlank()) onSend("/locops ${opMessage.trim()}") },
-                        enabled = opMessage.isNotBlank(), modifier = Modifier.focusHighlight(RoundedCornerShape(50))
-                    ) { Text(stringResource(R.string.ircop_locops)) }
-                }
-
-                HorizontalDivider()
-
-                // Server queries
-                Text(stringResource(R.string.chat_server_queries), fontWeight = FontWeight.Bold)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(onClick = { onSend("/motd"); showIrcOpTools = false }, modifier = Modifier.focusHighlight(RoundedCornerShape(50))) { Text(stringResource(R.string.ircop_motd)) }
-                    OutlinedButton(onClick = { onSend("/admin"); showIrcOpTools = false }, modifier = Modifier.focusHighlight(RoundedCornerShape(50))) { Text(stringResource(R.string.ircop_admin)) }
-                    OutlinedButton(onClick = { onSend("/stats u"); showIrcOpTools = false }, modifier = Modifier.focusHighlight(RoundedCornerShape(50))) { Text(stringResource(R.string.ircop_uptime)) }
-                    OutlinedButton(onClick = { onSend("/stats l"); showIrcOpTools = false }, modifier = Modifier.focusHighlight(RoundedCornerShape(50))) { Text(stringResource(R.string.ircop_links)) }
-                }
-
-                Spacer(Modifier.height(8.dp))
-            }
-        }
+    if (showIrcOpTools && viewModel != null) {
+        OperatorPanel(viewModel, selNetId, selNetName, state.connections[selNetId]?.myNick.orEmpty(),
+            isIrcOper, state.connections[selNetId]?.connected == true) { showIrcOpTools = false }
     }
 
-    // mIRC colour/style picker sheet
     if (showColorPicker) {
         // ── IRC text formatting: 99-colour mIRC picker ──
         // Live preview, style chips, FG/BG tab, colour grid and hex label. A swatch sets the text

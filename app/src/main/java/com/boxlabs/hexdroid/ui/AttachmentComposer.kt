@@ -17,6 +17,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.boxlabs.hexdroid.IrcViewModel
+import com.boxlabs.hexdroid.UiSettings
+import com.boxlabs.hexdroid.UploadProvider
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -182,7 +184,7 @@ internal fun rememberAttachmentActions(
 }
 
 @Composable
-internal fun AttachmentButton(actions: AttachmentActions) {
+internal fun AttachmentButton(actions: AttachmentActions, settings: UiSettings, onTorChanged: (Boolean) -> Unit) {
     Box {
         if (actions.uploading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
         else IconButton(onClick = { actions.menuOpen = true }, modifier = Modifier.size(28.dp)) {
@@ -190,6 +192,17 @@ internal fun AttachmentButton(actions: AttachmentActions) {
         }
         DropdownMenu(actions.menuOpen, { actions.menuOpen = false }) {
             fun choose(action: () -> Unit) { actions.menuOpen = false; action() }
+            if (settings.uploadProvider == UploadProvider.DROPFO) {
+                DropdownMenuItem(
+                    text = { Column {
+                        Text("Upload via Tor")
+                        Text("Orbot · 127.0.0.1:9050", style = MaterialTheme.typography.bodySmall)
+                    } },
+                    onClick = { onTorChanged(!settings.uploadDropFoTor) },
+                    trailingIcon = { Switch(settings.uploadDropFoTor, onCheckedChange = onTorChanged) },
+                )
+                HorizontalDivider()
+            }
             DropdownMenuItem(text = { Text("Take a photo") }, onClick = { choose(actions.photo) })
             DropdownMenuItem(text = { Text("Record a video") }, onClick = { choose(actions.video) })
             DropdownMenuItem(text = { Text("Choose existing photos") }, onClick = { choose(actions.images) })

@@ -10,8 +10,8 @@ android {
         applicationId = "org.wardriver.hexdroid"
         minSdk = 26
         targetSdk = 37
-        versionCode = 35
-        versionName = "1.7.6-wardriver.1"
+        versionCode = 36
+        versionName = "1.7.6-wardriver.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     // Release signing

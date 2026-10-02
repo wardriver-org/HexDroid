@@ -376,6 +376,10 @@ class SettingsRepository(private val ctx: Context) {
                 partMessage = o.optString("partMessage", UiSettings().partMessage),
                 colorizeNicks = o.optBoolean("colorizeNicks", true),
                 showNickIcons = o.optBoolean("showNickIcons", true),
+                alwaysShowChatControls = o.optBoolean("alwaysShowChatControls", false),
+                pinnedChannels = o.optJSONArray("pinnedChannels")?.let { a ->
+                    (0 until a.length()).mapNotNull { a.optString(it).takeIf { key -> key.isNotBlank() } }.toSet()
+                } ?: emptySet(),
                 ctcpRepliesEnabled = o.optBoolean("ctcpRepliesEnabled", true),
                 nickRegainEnabled = o.optBoolean("nickRegainEnabled", true),
                 ownNickColorInt = o.opt("ownNickColorInt")?.let { (it as? Int) ?: (it as? Long)?.toInt() },
@@ -494,6 +498,8 @@ class SettingsRepository(private val ctx: Context) {
         o.put("partMessage", s.partMessage)
         o.put("colorizeNicks", s.colorizeNicks)
         o.put("showNickIcons", s.showNickIcons)
+        o.put("alwaysShowChatControls", s.alwaysShowChatControls)
+        o.put("pinnedChannels", org.json.JSONArray(s.pinnedChannels.sorted()))
         o.put("ctcpRepliesEnabled", s.ctcpRepliesEnabled)
         o.put("nickRegainEnabled", s.nickRegainEnabled)
         if (s.ownNickColorInt != null) o.put("ownNickColorInt", s.ownNickColorInt) else o.remove("ownNickColorInt")

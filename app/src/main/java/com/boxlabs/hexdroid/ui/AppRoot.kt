@@ -79,6 +79,11 @@ fun AppRoot(
 ) {
     val mainActivity = LocalContext.current as? com.boxlabs.hexdroid.MainActivity
     val state by vm.state.collectAsStateWithLifecycle()
+    val mediaCacheDir = LocalContext.current.applicationContext.cacheDir
+    val remoteContentPool = remember(vm, mediaCacheDir) { RemoteContentPool(mediaCacheDir) }
+    androidx.compose.runtime.DisposableEffect(remoteContentPool) {
+        onDispose { remoteContentPool.close() }
+    }
     val scriptLaunchers by vm.scriptLaunchers.collectAsState()
     val mountedScriptView by vm.scriptView.collectAsState()
     val scriptFilePick by vm.scriptFilePick.collectAsState()
@@ -276,8 +281,8 @@ fun AppRoot(
             screenStateHolder.SaveableStateProvider(state.screen) {
 
             when (state.screen) {
-                AppScreen.CHAT -> RemoteContentScope(vm, state.selectedBuffer.substringBefore("::"),
-                    state.networks.firstOrNull { it.id == state.selectedBuffer.substringBefore("::") }?.proxyType != com.boxlabs.hexdroid.connection.ProxyType.NONE, state.networks) {
+                AppScreen.CHAT -> RemoteContentScope(remoteContentPool, vm, state.selectedBuffer.substringBefore("::"),
+                    state.networks.firstOrNull { it.id == state.selectedBuffer.substringBefore("::") }?.proxyType != com.boxlabs.hexdroid.connection.ProxyType.NONE, state.networks.firstOrNull { it.id == state.selectedBuffer.substringBefore("::") }) {
                     ChatScreen(
                     state = state,
                     onSelectBuffer = vm::openBuffer,

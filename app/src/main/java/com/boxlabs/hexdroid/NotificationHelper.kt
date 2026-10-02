@@ -223,6 +223,11 @@ class NotificationHelper(private val ctx: Context) {
     private fun openBufferPendingIntent(networkId: String, buffer: String, msgId: Long = -1L, msgAnchor: String? = null, stableRequestCode: Int = -1): PendingIntent? {
         val i = Intent(ctx, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            // Extras do not participate in PendingIntent identity. Distinguish each
+            // conversation from other chats and the fixed-code connection actions,
+            // including when the request-code counter restarts with the process.
+            data = android.net.Uri.Builder().scheme("hexdroid").authority("notification")
+                .appendPath("buffer").appendPath(networkId).appendPath(buffer).build()
             putExtra(EXTRA_NETWORK_ID, networkId)
             putExtra(EXTRA_BUFFER, buffer)
             if (msgId >= 0L) putExtra(EXTRA_MSG_ID, msgId)

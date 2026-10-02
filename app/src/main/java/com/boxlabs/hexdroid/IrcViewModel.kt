@@ -371,6 +371,8 @@ data class UiSettings(
      * their avatar would occupy. Red when away, green otherwise.
      */
     val showNickIcons: Boolean = true,
+    val alwaysShowChatControls: Boolean = false,
+    val pinnedChannels: Set<String> = emptySet(),
     /**
      * Answer CTCP VERSION, TIME, PING and the rest. Off means they are shown but never
      * replied to, so a stranger cannot learn the client, the platform or the clock.
@@ -1844,7 +1846,7 @@ class IrcViewModel(
      * True for buffers that exist only locally and are not a valid target.
      */
     private fun isPseudoBuffer(bufferName: String): Boolean =
-        bufferName == "*server*" || bufferName == RAW_BUFFER
+        bufferName == "*server*" || bufferName == "*oper*" || bufferName == RAW_BUFFER
 
     private fun bufKey(netId: String, bufferName: String): String = "$netId::$bufferName"
 
@@ -2618,8 +2620,9 @@ class IrcViewModel(
             }
         }
 
-        val netId = intent.getStringExtra(NotificationHelper.EXTRA_NETWORK_ID)
         val buf = intent.getStringExtra(NotificationHelper.EXTRA_BUFFER)
+        val netId = intent.getStringExtra(NotificationHelper.EXTRA_NETWORK_ID)?.takeIf { it.isNotBlank() }
+            ?: buf?.takeIf { it.isNotBlank() }?.let { networkForPushTarget(it)?.first }
         val action = intent.getStringExtra(NotificationHelper.EXTRA_ACTION)
         val highlightMsgId = intent.getLongExtra(NotificationHelper.EXTRA_MSG_ID, -1L)
             .takeIf { it >= 0L }
@@ -2700,6 +2703,30 @@ class IrcViewModel(
         }
     }
 
+    private fun rememberNetworkWindow(key: String) {
+        val (netId, name) = splitKey(key)
+        if (netId.isNotBlank() && name.isNotBlank() && !isPseudoBuffer(name)) {
+            appContext.getSharedPreferences("last_network_windows", android.content.Context.MODE_PRIVATE)
+                .edit().putString(netId, key).apply()
+        }
+    }
+
+    /** Selecting a network returns to its last available conversation, not its MOTD. */
+    fun openNetworkWindow(netId: String) {
+        val st = _state.value
+        rememberNetworkWindow(st.selectedBuffer)
+        val saved = appContext.getSharedPreferences("last_network_windows", android.content.Context.MODE_PRIVATE)
+            .getString(netId, null)
+        fun isConversation(key: String): Boolean {
+            val (id, name) = splitKey(key)
+            return id == netId && !isPseudoBuffer(name) && key in st.buffers
+        }
+        val target = saved?.takeIf(::isConversation)
+            ?: st.buffers.keys.firstOrNull(::isConversation)
+            ?: bufKey(netId, "*server*")
+        openBuffer(target)
+    }
+
     fun openBuffer(key: String) = openBuffer(key, switchToChat = true)
 
     /**
@@ -2710,6 +2737,8 @@ class IrcViewModel(
     fun openBufferInBackground(key: String) = openBuffer(key, switchToChat = false)
 
     private fun openBuffer(key: String, switchToChat: Boolean) {
+        rememberNetworkWindow(_state.value.selectedBuffer)
+        rememberNetworkWindow(key)
         ensureBuffer(key)
         val (netId, bufName) = splitKey(key)
 
@@ -3182,6 +3211,26 @@ class IrcViewModel(
     }
     fun setDccEnabled(enabled: Boolean) { updateSettings { copy(dccEnabled = enabled) } }
     fun setDccSendMode(mode: DccSendMode) { updateSettings { copy(dccSendMode = mode) } }
+
+    fun openOperEvents(netId: String) { openBuffer(bufKey(netId, "*oper*")) }
+
+    /** Bypass composer/history; the wire logger already redacts OPER credentials. */
+    fun operLogin(netId: String, name: String, password: String) {
+        if (name.isBlank() || password.isEmpty() || name.any { it.isWhitespace() || it.code < 32 } ||
+            password.any { it == '\r' || it == '\n' || it == '\u0000' }) return
+        val rt = runtimes[netId] ?: return
+        if (!rt.client.isConnectedNow()) return
+        viewModelScope.launch { rt.client.sendRaw("OPER $name :$password") }
+    }
+
+    fun sendOperCommand(netId: String, command: String) {
+        val rt = runtimes[netId] ?: return
+        if (!rt.client.isConnectedNow() || _state.value.connections[netId]?.isIrcOper != true) return
+        if (command.any { it == '\r' || it == '\n' || it == '\u0000' }) return
+        val verb = command.substringBefore(' ').uppercase(java.util.Locale.ROOT)
+        if (verb !in setOf("KILL", "KLINE", "GLINE", "ZLINE", "UNKLINE", "UNGLINE", "REHASH", "STATS", "MODE", "WALLOPS", "GLOBOPS", "LOCOPS", "SHUN")) return
+        viewModelScope.launch { rt.client.sendRaw(command) }
+    }
 
     fun setActiveNetwork(id: String) {
         val st = _state.value
@@ -5891,6 +5940,8 @@ fun startAddNetwork() {
                 // A sweep of a very large channel is a lot of traffic for a status column.
                 if ((st.nicklists[key]?.size ?: 0) > AWAY_POLL_MAX_MEMBERS) continue
                 val rt = runtimes[netId] ?: continue
+                // Initial WHO on join seeds state; negotiated AWAY events maintain it.
+                if (rt.client.hasCap("away-notify")) continue
                 runCatching { rt.client.refreshChannelWho(chan) }
             }
         }
@@ -7598,6 +7649,11 @@ fun startAddNetwork() {
             }
             is IrcEvent.ServerText -> {
                 val code = ev.code
+                if (code in setOf("WALLOPS", "GLOBOPS", "LOCOPS", "OPERWALL", "SNOTICE")) {
+                    ensureBuffer(bufKey(netId, "*oper*"))
+                    append(bufKey(netId, "*oper*"), from = null, text = ev.text, doNotify = false)
+                    return
+                }
                 val rt = runtimes[netId]
                 val motdCodes = setOf("375","372","376","422")
                 val hideMotd = _state.value.settings.hideMotdOnConnect
@@ -7701,6 +7757,8 @@ if (code == "442") {
             is IrcEvent.YoureOper -> {
                 append(bufKey(netId, "*server*"), from = null, text = "*** ${ev.message}", doNotify = false)
                 setNetConn(netId) { it.copy(isIrcOper = true) }
+                ensureBuffer(bufKey(netId, "*oper*"))
+                append(bufKey(netId, "*oper*"), from = null, text = "Operator login accepted", doNotify = false)
             }
             is IrcEvent.YoureDeOpered -> {
                 setNetConn(netId) { it.copy(isIrcOper = false) }
@@ -8601,7 +8659,7 @@ if (code == "442") {
                 }
 
                 val destKey = when {
-                    ev.isServer -> bufKey(netId, "*server*")
+                    ev.isServer -> if (st.connections[netId]?.isIrcOper == true) bufKey(netId, "*oper*") else bufKey(netId, "*server*")
                     targetIsServerBuffer -> bufKey(netId, "*server*")
                     isChanTarget -> resolveBufferKey(netId, normTarget)
                     else -> {

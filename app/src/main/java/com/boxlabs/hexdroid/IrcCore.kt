@@ -3148,7 +3148,12 @@ class IrcClient(val config: IrcConfig) {
 								// %u=ident %h=host %s=server %n=nick %f=flags %a=account %r=realname
 								trackWho(chan, null)
 								sendRaw("WHO $chan %tuhsnfar,42")
-							}
+							} else if (nickEquals(nick, currentNick) && irc.hasCap("away-notify") && !chanHist) {
+                                // Seed existing away flags once when WHOX is unavailable;
+                                // subsequent AWAY events replace periodic WHO polling.
+                                trackWho(chan, null)
+                                sendRaw("WHO $chan")
+                            }
 						}
 					}
 

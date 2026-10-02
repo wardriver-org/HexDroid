@@ -740,6 +740,9 @@ fun SettingsScreen(
             if (onePage) item { IntroTourCard(onRunTour) }
             if (onePage || current == SettingsCategory.APPEARANCE) {
             if (onePage) item(key = "hdr_APPEARANCE") { OnePageHeader(SettingsCategory.APPEARANCE) }
+            item { SettingToggle("Always show chat controls", s.alwaysShowChatControls) {
+                onUpdate { copy(alwaysShowChatControls = !alwaysShowChatControls) }
+            } }
             item {
                 LanguagePicker(
                     currentCode = s.appLanguage,
